@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -24,6 +25,49 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        {process.env.NODE_ENV === "development" && (
+          <>
+            <Script
+              src="//unpkg.com/react-grab/dist/index.global.js"
+              crossOrigin="anonymous"
+              strategy="beforeInteractive"
+              data-enabled="true"
+            />
+            <Script
+              id="react-grab-clipboard-interceptor"
+              strategy="afterInteractive"
+              dangerouslySetInnerHTML={{
+                __html: `
+                  (function() {
+                    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
+                    
+                    const originalWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
+                    
+                    navigator.clipboard.writeText = async function(text) {
+                      // Call original function first
+                      const result = await originalWriteText(text);
+                      
+                      // Send to server for logging
+                      try {
+                        await fetch('/api/log-clipboard', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ clipboardData: text, timestamp: new Date().toISOString() })
+                        });
+                      } catch (error) {
+                        console.error('Failed to log clipboard to server:', error);
+                      }
+                      
+                      return result;
+                    };
+                  })();
+                `,
+              }}
+            />
+          </>
+        )}
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
