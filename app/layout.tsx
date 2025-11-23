@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
+import { ReactGrabChatOverlay } from "@/components/react-grab-chat-overlay";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -39,26 +40,179 @@ export default function RootLayout({
               strategy="afterInteractive"
               dangerouslySetInnerHTML={{
                 __html: `
-                  (function() {
-                    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
-                    
+                  (() => {
+                    if (typeof window === 'undefined' || typeof navigator === 'undefined' || !navigator.clipboard) {
+                      return;
+                    }
+
+                    const PROJECT_ROOT = ${JSON.stringify(process.cwd())};
+                    const HIGHLIGHT_ATTR = 'data-react-grab-chat-highlighted';
+                    const STYLE_ID = 'react-grab-chat-highlight-style';
+                    const OPEN_EVENT = 'react-grab-chat:open';
+                    const CLOSE_EVENT = 'react-grab-chat:close';
+                    let lastPointer = null;
+                    let lastHighlighted = null;
+
+                    const ensureHighlightStyles = () => {
+                      if (document.getElementById(STYLE_ID)) return;
+                      const style = document.createElement('style');
+                      style.id = STYLE_ID;
+                      style.textContent = \`
+[data-react-grab-chat-highlighted="true"] {
+  outline: 2px solid #ff40e0;
+  outline-offset: 2px;
+  transition: outline 0.2s ease;
+}\`;
+                      document.head.appendChild(style);
+                    };
+
+                    const clearHighlight = () => {
+                      if (!lastHighlighted) return;
+                      lastHighlighted.removeAttribute(HIGHLIGHT_ATTR);
+                      lastHighlighted = null;
+                    };
+
+                    const applyHighlight = (element) => {
+                      if (!element) return;
+                      if (lastHighlighted && lastHighlighted !== element) {
+                        lastHighlighted.removeAttribute(HIGHLIGHT_ATTR);
+                      }
+                      lastHighlighted = element;
+                      element.setAttribute(HIGHLIGHT_ATTR, 'true');
+                    };
+
+                    const isOverlayElement = (element) => {
+                      return !!element?.closest?.('[data-react-grab]');
+                    };
+
+                    const findElementAtPoint = (clientX, clientY) => {
+                      const elements = document.elementsFromPoint(clientX, clientY);
+                      for (const element of elements) {
+                        if (!(element instanceof HTMLElement)) continue;
+                        if (isOverlayElement(element)) continue;
+                        const style = window.getComputedStyle(element);
+                        if (
+                          style.pointerEvents === 'none' ||
+                          style.visibility === 'hidden' ||
+                          style.display === 'none' ||
+                          Number(style.opacity) === 0
+                        ) {
+                          continue;
+                        }
+                        return element;
+                      }
+                      return null;
+                    };
+
+                    const parseClipboard = (text) => {
+                      if (typeof text !== 'string') return { htmlFrame: null, codeLocation: null };
+                      const htmlFrameMatch = text.match(/## HTML Frame:\\n([\\s\\S]*?)(?=\\n## Code Location:|$)/);
+                      const codeLocationMatch = text.match(/## Code Location:\\n([\\s\\S]*?)(?=\\n<\\/selected_element>|$)/);
+                      const selectedElementMatch = text.match(/<selected_element>\\n([\\s\\S]*?)\\n<\\/selected_element>/);
+                      const htmlFrame = htmlFrameMatch ? htmlFrameMatch[1].trim() : selectedElementMatch ? selectedElementMatch[1].trim() : null;
+                      const codeLocation = codeLocationMatch ? codeLocationMatch[1].trim() : null;
+                      return { htmlFrame, codeLocation };
+                    };
+
+                    const extractFilePath = (stack) => {
+                      if (typeof stack !== 'string') return null;
+                      const pathRegex = /\\b(?:in\\s+|at\\s+)((?:[A-Za-z]:)?\\/?[^\\s:)]+\\.(?:[jt]sx?|mdx?))/g;
+                      let match;
+                      while ((match = pathRegex.exec(stack))) {
+                        const candidate = match[1];
+                        if (candidate) return candidate.trim();
+                      }
+                      return null;
+                    };
+
+                    const toRelativePath = (filePath) => {
+                      if (!filePath || !PROJECT_ROOT) return filePath ?? null;
+                      const normalizedRoot = PROJECT_ROOT.endsWith('/') ? PROJECT_ROOT : \`\${PROJECT_ROOT}/\`;
+                      if (filePath.startsWith(normalizedRoot)) {
+                        const sliced = filePath.slice(normalizedRoot.length);
+                        return sliced.startsWith('/') ? sliced.slice(1) : sliced;
+                      }
+                      return filePath;
+                    };
+
+                    const dispatchOpenEvent = (detail) => {
+                      window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail }));
+                    };
+
+                    window.addEventListener('pointerup', (event) => {
+                      lastPointer = { clientX: event.clientX, clientY: event.clientY };
+                    }, true);
+
+                    window.addEventListener(CLOSE_EVENT, () => {
+                      clearHighlight();
+                    });
+
+                    ensureHighlightStyles();
+
                     const originalWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
-                    
+
                     navigator.clipboard.writeText = async function(text) {
-                      // Call original function first
+                      const parsed = parseClipboard(text);
+                      const isReactGrabPayload = Boolean(parsed.htmlFrame || parsed.codeLocation);
                       const result = await originalWriteText(text);
-                      
-                      // Send to server for logging
+
+                      if (!isReactGrabPayload) {
+                        return result;
+                      }
+
+                      const pointer = lastPointer;
+                      lastPointer = null;
+
+                      let boundingRect = null;
+                      let element = null;
+
+                      if (pointer) {
+                        element = findElementAtPoint(pointer.clientX, pointer.clientY);
+                      }
+
+                      if (!element) {
+                        const fallback = document.querySelector('[data-react-grab-chat-highlighted=\"true\"]');
+                        if (fallback instanceof HTMLElement) {
+                          element = fallback;
+                        }
+                      }
+
+                      if (element instanceof HTMLElement) {
+                        applyHighlight(element);
+                        const rect = element.getBoundingClientRect();
+                        boundingRect = {
+                          top: rect.top,
+                          left: rect.left,
+                          width: rect.width,
+                          height: rect.height,
+                        };
+                      }
+
+                      let filePath = parsed.codeLocation ? extractFilePath(parsed.codeLocation) : null;
+                      filePath = filePath ? toRelativePath(filePath) : null;
+
+                      dispatchOpenEvent({
+                        htmlFrame: parsed.htmlFrame,
+                        codeLocation: parsed.codeLocation,
+                        filePath,
+                        clipboardData: text,
+                        boundingRect,
+                      });
+
                       try {
                         await fetch('/api/log-clipboard', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ clipboardData: text, timestamp: new Date().toISOString() })
+                          body: JSON.stringify({
+                            clipboardData: text,
+                            timestamp: new Date().toISOString(),
+                            filePath,
+                          })
                         });
                       } catch (error) {
                         console.error('Failed to log clipboard to server:', error);
                       }
-                      
+
                       return result;
                     };
                   })();
@@ -72,6 +226,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         {children}
+        {process.env.NODE_ENV === "development" ? <ReactGrabChatOverlay /> : null}
       </body>
     </html>
   );

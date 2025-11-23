@@ -531,8 +531,324 @@ export function DataTable({
           </div>
         </div>
       </TabsContent>
-      <TabsContent value="past-performance" className="flex flex-col px-4 lg:px-6">
-        <div className="aspect-video w-full flex-1 rounded-lg border border-dashed"></div>
+      <TabsContent value="past-performance" className="relative flex flex-col gap-4 overflow-auto px-4 lg:px-6">
+        <div className="overflow-hidden rounded-lg border">
+          <Table>
+            <TableHeader className="bg-muted sticky top-0 z-10">
+              <TableRow>
+                <TableHead className="w-8"></TableHead>
+                <TableHead className="w-12">
+                  <div className="flex items-center justify-center">
+                    <Checkbox aria-label="Select all" />
+                  </div>
+                </TableHead>
+                <TableHead>Header</TableHead>
+                <TableHead>Section Type</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>
+                  <div className="w-full text-right">Target</div>
+                </TableHead>
+                <TableHead>
+                  <div className="w-full text-right">Limit</div>
+                </TableHead>
+                <TableHead>Reviewer</TableHead>
+                <TableHead className="w-8"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody className="**:data-[slot=table-cell]:first:w-8">
+              <TableRow>
+                <TableCell>
+                  <Button variant="ghost" size="icon" className="text-muted-foreground size-7 hover:bg-transparent">
+                    <IconGripVertical className="text-muted-foreground size-3" />
+                    <span className="sr-only">Drag to reorder</span>
+                  </Button>
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center justify-center">
+                    <Checkbox aria-label="Select row" />
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Button variant="link" className="text-foreground w-fit px-0 text-left">
+                    Project Alpha Completion
+                  </Button>
+                </TableCell>
+                <TableCell>
+                  <div className="w-32">
+                    <Badge variant="outline" className="text-muted-foreground px-1.5">
+                      Past Performance
+                    </Badge>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Badge variant="outline" className="text-muted-foreground px-1.5">
+                    <IconCircleCheckFilled className="fill-green-500 dark:fill-green-400" />
+                    Done
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault()
+                      toast.promise(new Promise((resolve) => setTimeout(resolve, 1000)), {
+                        loading: "Saving Project Alpha Completion",
+                        success: "Done",
+                        error: "Error",
+                      })
+                    }}
+                  >
+                    <Label htmlFor="past-1-target" className="sr-only">
+                      Target
+                    </Label>
+                    <Input
+                      className="hover:bg-input/30 focus-visible:bg-background dark:hover:bg-input/30 dark:focus-visible:bg-input/30 h-8 w-16 border-transparent bg-transparent text-right shadow-none focus-visible:border dark:bg-transparent"
+                      defaultValue="95%"
+                      id="past-1-target"
+                    />
+                  </form>
+                </TableCell>
+                <TableCell>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault()
+                      toast.promise(new Promise((resolve) => setTimeout(resolve, 1000)), {
+                        loading: "Saving Project Alpha Completion",
+                        success: "Done",
+                        error: "Error",
+                      })
+                    }}
+                  >
+                    <Label htmlFor="past-1-limit" className="sr-only">
+                      Limit
+                    </Label>
+                    <Input
+                      className="hover:bg-input/30 focus-visible:bg-background dark:hover:bg-input/30 dark:focus-visible:bg-input/30 h-8 w-16 border-transparent bg-transparent text-right shadow-none focus-visible:border dark:bg-transparent"
+                      defaultValue="100%"
+                      id="past-1-limit"
+                    />
+                  </form>
+                </TableCell>
+                <TableCell>Eddie Lake</TableCell>
+                <TableCell>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" className="data-[state=open]:bg-muted text-muted-foreground flex size-8" size="icon">
+                        <IconDotsVertical />
+                        <span className="sr-only">Open menu</span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-32">
+                      <DropdownMenuItem>Edit</DropdownMenuItem>
+                      <DropdownMenuItem>Make a copy</DropdownMenuItem>
+                      <DropdownMenuItem>Favorite</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem variant="destructive">Delete</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>
+                  <Button variant="ghost" size="icon" className="text-muted-foreground size-7 hover:bg-transparent">
+                    <IconGripVertical className="text-muted-foreground size-3" />
+                    <span className="sr-only">Drag to reorder</span>
+                  </Button>
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center justify-center">
+                    <Checkbox aria-label="Select row" />
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Button variant="link" className="text-foreground w-fit px-0 text-left">
+                    Beta Initiative Success
+                  </Button>
+                </TableCell>
+                <TableCell>
+                  <div className="w-32">
+                    <Badge variant="outline" className="text-muted-foreground px-1.5">
+                      Past Performance
+                    </Badge>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Badge variant="outline" className="text-muted-foreground px-1.5">
+                    <IconLoader />
+                    In Progress
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault()
+                      toast.promise(new Promise((resolve) => setTimeout(resolve, 1000)), {
+                        loading: "Saving Beta Initiative Success",
+                        success: "Done",
+                        error: "Error",
+                      })
+                    }}
+                  >
+                    <Label htmlFor="past-2-target" className="sr-only">
+                      Target
+                    </Label>
+                    <Input
+                      className="hover:bg-input/30 focus-visible:bg-background dark:hover:bg-input/30 dark:focus-visible:bg-input/30 h-8 w-16 border-transparent bg-transparent text-right shadow-none focus-visible:border dark:bg-transparent"
+                      defaultValue="88%"
+                      id="past-2-target"
+                    />
+                  </form>
+                </TableCell>
+                <TableCell>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault()
+                      toast.promise(new Promise((resolve) => setTimeout(resolve, 1000)), {
+                        loading: "Saving Beta Initiative Success",
+                        success: "Done",
+                        error: "Error",
+                      })
+                    }}
+                  >
+                    <Label htmlFor="past-2-limit" className="sr-only">
+                      Limit
+                    </Label>
+                    <Input
+                      className="hover:bg-input/30 focus-visible:bg-background dark:hover:bg-input/30 dark:focus-visible:bg-input/30 h-8 w-16 border-transparent bg-transparent text-right shadow-none focus-visible:border dark:bg-transparent"
+                      defaultValue="95%"
+                      id="past-2-limit"
+                    />
+                  </form>
+                </TableCell>
+                <TableCell>Jamik Tashpulatov</TableCell>
+                <TableCell>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" className="data-[state=open]:bg-muted text-muted-foreground flex size-8" size="icon">
+                        <IconDotsVertical />
+                        <span className="sr-only">Open menu</span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-32">
+                      <DropdownMenuItem>Edit</DropdownMenuItem>
+                      <DropdownMenuItem>Make a copy</DropdownMenuItem>
+                      <DropdownMenuItem>Favorite</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem variant="destructive">Delete</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>
+                  <Button variant="ghost" size="icon" className="text-muted-foreground size-7 hover:bg-transparent">
+                    <IconGripVertical className="text-muted-foreground size-3" />
+                    <span className="sr-only">Drag to reorder</span>
+                  </Button>
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center justify-center">
+                    <Checkbox aria-label="Select row" />
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Button variant="link" className="text-foreground w-fit px-0 text-left">
+                    Gamma Project Milestone
+                  </Button>
+                </TableCell>
+                <TableCell>
+                  <div className="w-32">
+                    <Badge variant="outline" className="text-muted-foreground px-1.5">
+                      Past Performance
+                    </Badge>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Badge variant="outline" className="text-muted-foreground px-1.5">
+                    <IconLoader />
+                    Not Started
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault()
+                      toast.promise(new Promise((resolve) => setTimeout(resolve, 1000)), {
+                        loading: "Saving Gamma Project Milestone",
+                        success: "Done",
+                        error: "Error",
+                      })
+                    }}
+                  >
+                    <Label htmlFor="past-3-target" className="sr-only">
+                      Target
+                    </Label>
+                    <Input
+                      className="hover:bg-input/30 focus-visible:bg-background dark:hover:bg-input/30 dark:focus-visible:bg-input/30 h-8 w-16 border-transparent bg-transparent text-right shadow-none focus-visible:border dark:bg-transparent"
+                      defaultValue="75%"
+                      id="past-3-target"
+                    />
+                  </form>
+                </TableCell>
+                <TableCell>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault()
+                      toast.promise(new Promise((resolve) => setTimeout(resolve, 1000)), {
+                        loading: "Saving Gamma Project Milestone",
+                        success: "Done",
+                        error: "Error",
+                      })
+                    }}
+                  >
+                    <Label htmlFor="past-3-limit" className="sr-only">
+                      Limit
+                    </Label>
+                    <Input
+                      className="hover:bg-input/30 focus-visible:bg-background dark:hover:bg-input/30 dark:focus-visible:bg-input/30 h-8 w-16 border-transparent bg-transparent text-right shadow-none focus-visible:border dark:bg-transparent"
+                      defaultValue="90%"
+                      id="past-3-limit"
+                    />
+                  </form>
+                </TableCell>
+                <TableCell>
+                  <Label htmlFor="past-3-reviewer" className="sr-only">
+                    Reviewer
+                  </Label>
+                  <Select>
+                    <SelectTrigger
+                      className="w-38 **:data-[slot=select-value]:block **:data-[slot=select-value]:truncate"
+                      size="sm"
+                      id="past-3-reviewer"
+                    >
+                      <SelectValue placeholder="Assign reviewer" />
+                    </SelectTrigger>
+                    <SelectContent align="end">
+                      <SelectItem value="Eddie Lake">Eddie Lake</SelectItem>
+                      <SelectItem value="Jamik Tashpulatov">Jamik Tashpulatov</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </TableCell>
+                <TableCell>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" className="data-[state=open]:bg-muted text-muted-foreground flex size-8" size="icon">
+                        <IconDotsVertical />
+                        <span className="sr-only">Open menu</span>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-32">
+                      <DropdownMenuItem>Edit</DropdownMenuItem>
+                      <DropdownMenuItem>Make a copy</DropdownMenuItem>
+                      <DropdownMenuItem>Favorite</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem variant="destructive">Delete</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
       </TabsContent>
       <TabsContent value="key-personnel" className="flex flex-col px-4 lg:px-6">
         <div className="aspect-video w-full flex-1 rounded-lg border border-dashed"></div>
