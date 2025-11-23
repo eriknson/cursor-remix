@@ -138,7 +138,7 @@ const data = {
       icon: IconDatabase,
     },
     {
-      name: "Reports",
+      name: "Analytics",
       url: "#",
       icon: IconReport,
     },

@@ -135,6 +135,70 @@ export default function RootLayout({
                       return filePath;
                     };
 
+                    const OVERLAY_SELECTOR = '[data-react-grab="true"]';
+                    const TOOLTIP_SELECTOR =
+                      'div.pointer-events-none.bg-grab-pink-light.text-grab-pink';
+
+                    const findTooltipElement = () => {
+                      const visited = new Set();
+                      const visit = (node) => {
+                        if (!node || visited.has(node)) {
+                          return null;
+                        }
+                        visited.add(node);
+
+                        if (typeof node.querySelector === 'function') {
+                          const match = node.querySelector(TOOLTIP_SELECTOR);
+                          if (match instanceof HTMLElement) {
+                            return match;
+                          }
+                        }
+
+                        if (node instanceof HTMLElement || node instanceof DocumentFragment) {
+                          const children = node.children ? Array.from(node.children) : [];
+                          for (const child of children) {
+                            const found = visit(child);
+                            if (found) {
+                              return found;
+                            }
+                          }
+                        }
+
+                        if (node instanceof HTMLElement && node.shadowRoot) {
+                          return visit(node.shadowRoot);
+                        }
+
+                        return null;
+                      };
+
+                      const hosts = document.querySelectorAll(OVERLAY_SELECTOR);
+                      for (const host of hosts) {
+                        const found = visit(host) ?? (host.shadowRoot ? visit(host.shadowRoot) : null);
+                        if (found) {
+                          return found;
+                        }
+                      }
+
+                      return null;
+                    };
+
+                    const getHoverTagRect = () => {
+                      const tooltip = findTooltipElement();
+                      if (!(tooltip instanceof HTMLElement)) {
+                        return null;
+                      }
+                      const rect = tooltip.getBoundingClientRect();
+                      if (rect.width === 0 && rect.height === 0) {
+                        return null;
+                      }
+                      return {
+                        top: rect.top,
+                        left: rect.left,
+                        width: rect.width,
+                        height: rect.height,
+                      };
+                    };
+
                     const dispatchOpenEvent = (detail) => {
                       window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail }));
                     };
@@ -162,6 +226,9 @@ export default function RootLayout({
 
                       const pointer = lastPointer;
                       lastPointer = null;
+                      const pointerPayload = pointer
+                        ? { x: pointer.clientX, y: pointer.clientY }
+                        : null;
 
                       let boundingRect = null;
                       let element = null;
@@ -191,12 +258,16 @@ export default function RootLayout({
                       let filePath = parsed.codeLocation ? extractFilePath(parsed.codeLocation) : null;
                       filePath = filePath ? toRelativePath(filePath) : null;
 
+                      const tagRect = getHoverTagRect();
+
                       dispatchOpenEvent({
                         htmlFrame: parsed.htmlFrame,
                         codeLocation: parsed.codeLocation,
                         filePath,
                         clipboardData: text,
+                        pointer: pointerPayload,
                         boundingRect,
+                        tagRect,
                       });
 
                       try {

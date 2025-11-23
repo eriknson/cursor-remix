@@ -32,12 +32,18 @@ import {
 
 export const description = "An interactive area chart"
 
-// Generate consistent parabolic increase data
-// Formula: y = start + (end - start) * (x/totalDays)^2
-// This creates a smooth parabolic curve that increases consistently
+// Generate realistic visitor data with natural variation
+// Includes weekly patterns, random fluctuations, and overall growth trend
 const startDate = new Date("2024-04-01")
-const endDate = new Date("2024-06-30")
+const endDate = new Date("2024-09-30")
 const totalDays = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24))
+
+// Simple seeded random for consistency
+let seed = 42
+const random = () => {
+  seed = (seed * 9301 + 49297) % 233280
+  return seed / 233280
+}
 
 const chartData = Array.from({ length: totalDays + 1 }, (_, index) => {
   const currentDate = new Date(startDate)
@@ -49,11 +55,24 @@ const chartData = Array.from({ length: totalDays + 1 }, (_, index) => {
   // Parabolic curve: square the progress for smooth acceleration
   const parabolicProgress = progress * progress
   
-  // Desktop: smooth parabolic increase from 80 to 550
-  const desktop = Math.round(80 + (550 - 80) * parabolicProgress)
+  // Base trend: smooth parabolic increase
+  const baseDesktop = 80 + (550 - 80) * parabolicProgress
+  const baseMobile = 60 + (480 - 60) * parabolicProgress
   
-  // Mobile: smooth parabolic increase from 60 to 480
-  const mobile = Math.round(60 + (480 - 60) * parabolicProgress)
+  // Weekly pattern: weekends typically have lower traffic
+  const dayOfWeek = currentDate.getDay()
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6
+  const weeklyMultiplier = isWeekend ? 0.85 + random() * 0.1 : 1.0 + random() * 0.15
+  
+  // Random variation: ±15% for realistic fluctuations
+  const randomVariation = 0.85 + random() * 0.3
+  
+  // Occasional spikes (5% chance of a spike)
+  const spikeMultiplier = random() < 0.05 ? 1.3 + random() * 0.4 : 1.0
+  
+  // Combine all factors
+  const desktop = Math.round(baseDesktop * weeklyMultiplier * randomVariation * spikeMultiplier)
+  const mobile = Math.round(baseMobile * weeklyMultiplier * randomVariation * spikeMultiplier)
   
   return { date: dateStr, desktop, mobile }
 })
@@ -65,22 +84,22 @@ const chartConfig = {
   desktop: {
     label: "Desktop",
     theme: {
-      light: "var(--chart-1)",
-      dark: "var(--chart-1)",
+      light: "hsl(280 90% 60%)",
+      dark: "hsl(280 90% 65%)",
     },
   },
   mobile: {
     label: "Mobile",
     theme: {
-      light: "var(--chart-2)",
-      dark: "var(--chart-2)",
+      light: "hsl(340 90% 60%)",
+      dark: "hsl(340 90% 65%)",
     },
   },
 } satisfies ChartConfig
 
 export function ChartAreaInteractive() {
   const isMobile = useIsMobile()
-  const [timeRange, setTimeRange] = React.useState("90d")
+  const [timeRange, setTimeRange] = React.useState("180d")
 
   React.useEffect(() => {
     if (isMobile) {
@@ -90,8 +109,8 @@ export function ChartAreaInteractive() {
 
   const filteredData = chartData.filter((item) => {
     const date = new Date(item.date)
-    const referenceDate = new Date("2024-06-30")
-    let daysToSubtract = 90
+    const referenceDate = new Date("2024-09-30")
+    let daysToSubtract = 180
     if (timeRange === "30d") {
       daysToSubtract = 30
     } else if (timeRange === "7d") {
@@ -108,9 +127,9 @@ export function ChartAreaInteractive() {
         <CardTitle>Total Visitors</CardTitle>
         <CardDescription>
           <span className="hidden @[540px]/card:block">
-            Total for the last 3 months
+            the last 6 months
           </span>
-          <span className="@[540px]/card:hidden">Last 3 months</span>
+          <span className="@[540px]/card:hidden">Last 6 months</span>
         </CardDescription>
         <CardAction>
           <ToggleGroup
@@ -120,7 +139,7 @@ export function ChartAreaInteractive() {
             variant="outline"
             className="hidden *:data-[slot=toggle-group-item]:!px-4 @[767px]/card:flex"
           >
-            <ToggleGroupItem value="90d">Last 3 months</ToggleGroupItem>
+            <ToggleGroupItem value="180d">Last 6 months</ToggleGroupItem>
             <ToggleGroupItem value="30d">Last 30 days</ToggleGroupItem>
             <ToggleGroupItem value="7d">Last 7 days</ToggleGroupItem>
           </ToggleGroup>
@@ -130,11 +149,11 @@ export function ChartAreaInteractive() {
               size="sm"
               aria-label="Select a value"
             >
-              <SelectValue placeholder="Last 3 months" />
+              <SelectValue placeholder="Last 6 months" />
             </SelectTrigger>
             <SelectContent className="rounded-xl">
-              <SelectItem value="90d" className="rounded-lg">
-                Last 3 months
+              <SelectItem value="180d" className="rounded-lg">
+                Last 6 months
               </SelectItem>
               <SelectItem value="30d" className="rounded-lg">
                 Last 30 days

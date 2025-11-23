@@ -13,10 +13,11 @@ type RequestPayload = {
   htmlFrame: string | null;
   stackTrace: string | null;
   instruction: string;
+  model?: string;
 };
 
 const CURSOR_BINARY_HINT = process.env.CURSOR_AGENT_BIN ?? "cursor-agent";
-const MODEL = "composer-1";
+const DEFAULT_MODEL = "composer-1";
 const HOME_DIR = process.env.HOME ?? process.env.USERPROFILE ?? "";
 
 let cachedCursorAgentBinary: string | null = null;
@@ -28,13 +29,71 @@ const normalizeFilePath = (filePath: string | null) => {
   const trimmed = filePath.trim();
   if (!trimmed) return null;
 
-  const cwd = process.cwd();
-  if (path.isAbsolute(trimmed)) {
-    const relative = path.relative(cwd, trimmed);
-    return relative.startsWith("..") ? trimmed : relative;
+  const webpackPrefix = "webpack-internal:///";
+  const filePrefix = "file://";
+  let sanitized = trimmed;
+  if (sanitized.startsWith(webpackPrefix)) {
+    sanitized = sanitized.slice(webpackPrefix.length);
+  }
+  if (sanitized.startsWith(filePrefix)) {
+    sanitized = sanitized.slice(filePrefix.length);
+  }
+  if (sanitized.startsWith("./")) {
+    sanitized = sanitized.slice(2);
   }
 
-  return trimmed;
+  if (!sanitized) {
+    return null;
+  }
+
+  const cwd = process.cwd();
+  if (path.isAbsolute(sanitized)) {
+    const relative = path.relative(cwd, sanitized);
+    return relative.startsWith("..") ? sanitized : relative;
+  }
+
+  return sanitized;
+};
+
+const STACK_TRACE_PATH_PATTERN = /([^\s()]+?\.(?:[jt]sx?|mdx?))/gi;
+
+const extractFilePathFromStackTrace = (stackTrace: string | null) => {
+  if (!stackTrace) return null;
+
+  STACK_TRACE_PATH_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = STACK_TRACE_PATH_PATTERN.exec(stackTrace))) {
+    const rawCandidate = match[1];
+    if (typeof rawCandidate !== "string") {
+      continue;
+    }
+
+    let candidate = rawCandidate.trim();
+    if (!candidate) {
+      continue;
+    }
+
+    if (candidate.includes("node_modules/") || candidate.includes("node_modules\\")) {
+      continue;
+    }
+
+    if (candidate.startsWith("webpack-internal:///")) {
+      candidate = candidate.slice("webpack-internal:///".length);
+    }
+
+    if (candidate.startsWith("./")) {
+      candidate = candidate.slice(2);
+    }
+
+    if (!candidate) {
+      continue;
+    }
+
+    return candidate;
+  }
+
+  return null;
 };
 
 const buildPrompt = (filePath: string, htmlFrame: string | null, stackTrace: string | null, instruction: string) => {
@@ -167,12 +226,161 @@ const resolveCursorAgentBinary = async () => {
   return resolveBinaryPromise;
 };
 
-async function runCursorAgent(prompt: string) {
-  const binary = await resolveCursorAgentBinary();
+type StreamEvent =
+  | { event: "status"; message: string }
+  | { event: "assistant"; text: string }
+  | {
+      event: "done";
+      success: boolean;
+      summary: string;
+      exitCode: number | null;
+      error?: string;
+      stderr?: string;
+    };
 
-  return await new Promise<{ exitCode: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+const STREAM_HEADERS = {
+  "Content-Type": "application/x-ndjson; charset=utf-8",
+  "Cache-Control": "no-cache, no-transform",
+};
+
+const STATUS_KEYS = ["text", "value", "delta", "message", "summary", "label"];
+
+const extractAssistantText = (input: unknown, seen = new WeakSet<object>()): string => {
+  if (!input) return "";
+  if (typeof input === "string") {
+    return input;
+  }
+  if (Array.isArray(input)) {
+    return input.map((entry) => extractAssistantText(entry, seen)).join("");
+  }
+  if (typeof input === "object") {
+    if (seen.has(input as object)) return "";
+    seen.add(input as object);
+
+    const record = input as Record<string, unknown>;
+    let text = "";
+
+    for (const key of STATUS_KEYS) {
+      const value = record[key];
+      if (typeof value === "string") {
+        text += value;
+      } else if (value) {
+        text += extractAssistantText(value, seen);
+      }
+    }
+
+    if ("content" in record) {
+      text += extractAssistantText(record.content, seen);
+    }
+    if ("parts" in record) {
+      text += extractAssistantText(record.parts, seen);
+    }
+    if ("text_delta" in record) {
+      text += extractAssistantText(record.text_delta, seen);
+    }
+
+    return text;
+  }
+  return "";
+};
+
+const describeEvent = (event: unknown): string | null => {
+  if (!event || typeof event !== "object") {
+    return null;
+  }
+
+  const payload = event as Record<string, unknown>;
+  const type = typeof payload.type === "string" ? payload.type : null;
+  const subtype = typeof payload.subtype === "string" ? payload.subtype : null;
+
+  if (type === "system") {
+    if (subtype === "init") {
+      return "Initializing agent…";
+    }
+    if (subtype === "progress" && typeof payload.message === "string") {
+      return payload.message;
+    }
+    if (subtype === "completed") {
+      return "Agent ready.";
+    }
+    return subtype ? `System update: ${subtype}` : "System update.";
+  }
+
+  if (type === "assistant") {
+    return "Thinking…";
+  }
+
+  if (type === "tool_call") {
+    const toolName =
+      typeof payload.tool === "object" && payload.tool && typeof (payload.tool as Record<string, unknown>).name === "string"
+        ? String((payload.tool as Record<string, unknown>).name)
+        : "Tool";
+    const normalizedName = toolName.toLowerCase();
+
+    if (subtype === "started") {
+      if (
+        normalizedName.includes("apply") ||
+        normalizedName.includes("write") ||
+        normalizedName.includes("patch") ||
+        normalizedName.includes("build")
+      ) {
+        return "Building changes…";
+      }
+      if (normalizedName.includes("plan") || normalizedName.includes("analy")) {
+        return "Analyzing project…";
+      }
+      return `Running ${toolName}…`;
+    }
+    if (subtype === "completed") {
+      if (
+        normalizedName.includes("apply") ||
+        normalizedName.includes("write") ||
+        normalizedName.includes("patch") ||
+        normalizedName.includes("build")
+      ) {
+        return "Build step complete.";
+      }
+      return `${toolName} finished.`;
+    }
+    return `${toolName} ${subtype ?? "update"}…`;
+  }
+
+  if (type === "result") {
+    return "Finalizing changes…";
+  }
+
+  if (type === "error") {
+    if (typeof payload.message === "string") {
+      return `Error: ${payload.message}`;
+    }
+    return "Cursor CLI reported an error.";
+  }
+
+  if (typeof payload.message === "string") {
+    return payload.message;
+  }
+
+  return type ? `Event: ${type}${subtype ? `/${subtype}` : ""}` : null;
+};
+
+async function runCursorAgentStream(
+  binary: string,
+  model: string,
+  prompt: string,
+  send: (event: StreamEvent) => void,
+) {
+  await new Promise<void>((resolve) => {
     try {
-      const args = ["--print", "--force", "--model", MODEL, prompt];
+      const args = [
+        "--print",
+        "--force",
+        "--output-format",
+        "stream-json",
+        "--stream-partial-output",
+        "--model",
+        model,
+        prompt,
+      ];
 
       console.log("[react-grab-chat] Spawning cursor-agent", {
         command: binary,
@@ -186,10 +394,64 @@ async function runCursorAgent(prompt: string) {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
-      let stdout = "";
-      let stderr = "";
+      let stdoutBuffer = "";
+      let stderrAggregate = "";
+      let assistantSummary = "";
       let settled = false;
+
       const timeoutMs = Number(process.env.REACT_GRAB_AGENT_TIMEOUT_MS ?? 4 * 60 * 1000);
+
+      const sendStatus = (message: string) => {
+        if (!message) return;
+        send({ event: "status", message });
+      };
+
+      const appendAssistant = (text: string) => {
+        if (!text) return;
+        assistantSummary += text;
+        send({ event: "assistant", text });
+      };
+
+      const flushDone = (success: boolean, exitCode: number | null, error?: string) => {
+        send({
+          event: "done",
+          success,
+          summary: assistantSummary.trim(),
+          exitCode,
+          error,
+          stderr: stderrAggregate.trim() || undefined,
+        });
+      };
+
+      const processLine = (line: string) => {
+        if (!line.trim()) {
+          return;
+        }
+
+        try {
+          const parsed = JSON.parse(line) as Record<string, unknown>;
+          const status = describeEvent(parsed);
+          if (status) {
+            sendStatus(status);
+          }
+
+          if (typeof parsed.type === "string" && parsed.type === "assistant") {
+            const text = extractAssistantText(parsed);
+            appendAssistant(text);
+          }
+
+          if (typeof parsed.type === "string" && parsed.type === "result") {
+            const text = extractAssistantText(parsed);
+            appendAssistant(text);
+          }
+        } catch (error) {
+          console.warn("[react-grab-chat] Failed to parse cursor-agent stream line", {
+            line,
+            error,
+          });
+          sendStatus(line);
+        }
+      };
 
       const timeoutId = setTimeout(() => {
         if (settled) return;
@@ -199,37 +461,37 @@ async function runCursorAgent(prompt: string) {
           timeoutMs,
         });
 
+        sendStatus(`Cursor CLI timed out after ${timeoutMs}ms; terminating process.`);
+
         try {
           child.kill("SIGTERM");
         } catch (killError) {
           console.warn("[react-grab-chat] Failed to terminate cursor-agent process", killError);
         }
 
-        const trimmedStdout = stdout.trim();
-        const trimmedStderr = stderr.trim();
-        if (trimmedStdout) {
-          console.log("[react-grab-chat] cursor-agent stdout (timeout):", trimmedStdout);
-        }
-        if (trimmedStderr) {
-          console.error("[react-grab-chat] cursor-agent stderr (timeout):", trimmedStderr);
-        }
-
-        resolve({
-          exitCode: null,
-          stdout,
-          stderr: `${stderr}\nProcess timed out after ${timeoutMs}ms`.trim(),
-        });
+        flushDone(false, null, `Cursor CLI timed out after ${timeoutMs}ms.`);
+        resolve();
       }, timeoutMs);
 
-      child.stdout.on("data", (data) => {
-        const text = data.toString();
-        stdout += text;
-        console.log("[react-grab-chat] cursor-agent stdout:", text);
+      child.stdout.on("data", (chunk) => {
+        const text = chunk.toString();
+        stdoutBuffer += text;
+
+        let newlineIndex = stdoutBuffer.indexOf("\n");
+        while (newlineIndex !== -1) {
+          const line = stdoutBuffer.slice(0, newlineIndex);
+          stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+          processLine(line);
+          newlineIndex = stdoutBuffer.indexOf("\n");
+        }
       });
 
-      child.stderr.on("data", (data) => {
-        const text = data.toString();
-        stderr += text;
+      child.stderr.on("data", (chunk) => {
+        const text = chunk.toString();
+        stderrAggregate += text;
+        for (const line of text.split(/\r?\n/).map((entry: string) => entry.trim()).filter(Boolean)) {
+          sendStatus(`[stderr] ${line}`);
+        }
         console.error("[react-grab-chat] cursor-agent stderr:", text);
       });
 
@@ -238,31 +500,43 @@ async function runCursorAgent(prompt: string) {
         settled = true;
         clearTimeout(timeoutId);
         console.error("[react-grab-chat] cursor-agent failed to start", error);
-        reject(error);
+        flushDone(false, null, error instanceof Error ? error.message : "Failed to start Cursor CLI.");
+        resolve();
       });
 
       child.on("close", (exitCode) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeoutId);
-        const trimmedStdout = stdout.trim();
-        const trimmedStderr = stderr.trim();
+
+        if (stdoutBuffer.trim()) {
+          processLine(stdoutBuffer);
+          stdoutBuffer = "";
+        }
 
         console.log("[react-grab-chat] cursor-agent exited", { exitCode });
-        if (trimmedStdout) {
-          console.log("[react-grab-chat] cursor-agent stdout (final):", trimmedStdout);
+
+        if (exitCode === 0) {
+          flushDone(true, exitCode ?? 0);
         } else {
-          console.log("[react-grab-chat] cursor-agent stdout (final): <empty>");
-        }
-        if (trimmedStderr) {
-          console.error("[react-grab-chat] cursor-agent stderr (final):", trimmedStderr);
+          const error =
+            stderrAggregate.trim() ||
+            `Cursor CLI exited with status ${exitCode ?? "unknown"}. Check server logs for details.`;
+          flushDone(false, exitCode ?? null, error);
         }
 
-        resolve({ exitCode, stdout, stderr });
+        resolve();
       });
     } catch (error) {
       console.error("[react-grab-chat] Unexpected error launching cursor-agent", error);
-      reject(error);
+      send({
+        event: "done",
+        success: false,
+        summary: "",
+        exitCode: null,
+        error: error instanceof Error ? error.message : "Unexpected error launching Cursor CLI.",
+      });
+      resolve();
     }
   });
 }
@@ -286,6 +560,7 @@ export async function POST(request: NextRequest) {
     filePath: payload.filePath,
     hasHtmlFrame: Boolean(payload.htmlFrame),
     hasStackTrace: Boolean(payload.stackTrace),
+    model: payload.model,
   });
 
   const instruction = payload.instruction?.trim();
@@ -293,46 +568,102 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Instruction is required." }, { status: 400 });
   }
 
-  const normalizedFilePath = normalizeFilePath(payload.filePath);
+  const directFilePath = normalizeFilePath(payload.filePath);
+  const derivedFilePath =
+    directFilePath ??
+    (payload.filePath ? null : normalizeFilePath(extractFilePathFromStackTrace(payload.stackTrace)));
+  const normalizedFilePath = derivedFilePath;
+
+  if (!directFilePath && normalizedFilePath) {
+    console.log("[react-grab-chat] Derived file path from stack trace", {
+      stackTracePreview: payload.stackTrace?.slice(0, 200),
+      derivedFilePath: normalizedFilePath,
+    });
+  }
+
   if (!normalizedFilePath) {
     return NextResponse.json({ error: "Unable to determine target file path from stack trace." }, { status: 400 });
   }
 
   const prompt = buildPrompt(normalizedFilePath, payload.htmlFrame, payload.stackTrace, instruction);
+  const model = payload.model?.trim() || DEFAULT_MODEL;
   console.log("[react-grab-chat] Built prompt for cursor-agent", {
     filePath: normalizedFilePath,
     hasHtmlFrame: Boolean(payload.htmlFrame),
     hasStackTrace: Boolean(payload.stackTrace),
     prompt,
+    model,
   });
 
   try {
-    const result = await runCursorAgent(prompt);
+    const binary = await resolveCursorAgentBinary();
+    const encoder = new TextEncoder();
 
-    if (result.exitCode !== 0) {
-      console.error("[react-grab-chat] cursor-agent exited with error", {
-        exitCode: result.exitCode,
-        stderr: result.stderr,
-      });
-      return NextResponse.json(
-        {
-          error: "Cursor CLI exited with a non-zero status.",
-          stdout: result.stdout,
-          stderr: result.stderr,
-          exitCode: result.exitCode,
-          prompt,
-        },
-        { status: 500 },
-      );
-    }
+    const stream = new ReadableStream({
+      async start(controller) {
+        const state = { isClosed: false };
 
-    console.log("[react-grab-chat] cursor-agent completed successfully");
+        const send = (event: StreamEvent) => {
+          if (state.isClosed) {
+            return;
+          }
+          try {
+            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          } catch (error) {
+            // Controller might be closed, mark it as closed and stop sending
+            if (
+              error instanceof TypeError &&
+              (error.message.includes("closed") || error.message.includes("Invalid state"))
+            ) {
+              state.isClosed = true;
+            }
+          }
+        };
 
-    return NextResponse.json({
-      success: true,
-      stdout: result.stdout,
-      exitCode: result.exitCode,
-      prompt,
+        // Handle request abort
+        request.signal.addEventListener("abort", () => {
+          state.isClosed = true;
+          try {
+            controller.close();
+          } catch {
+            // Controller might already be closed, ignore
+          }
+        });
+
+        send({ event: "status", message: `Preparing Cursor CLI request (${model})…` });
+
+        try {
+          await runCursorAgentStream(binary, model, prompt, send);
+        } catch (error) {
+          if (state.isClosed) {
+            return;
+          }
+          console.error("[react-grab-chat] Failed during Cursor CLI streaming", error);
+          send({
+            event: "done",
+            success: false,
+            summary: "",
+            exitCode: null,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Unexpected error streaming from Cursor CLI.",
+          });
+        } finally {
+          if (!state.isClosed) {
+            try {
+              controller.close();
+            } catch {
+              // Controller might already be closed, ignore
+            }
+            state.isClosed = true;
+          }
+        }
+      },
+    });
+
+    return new NextResponse(stream, {
+      headers: STREAM_HEADERS,
     });
   } catch (error) {
     console.error("[react-grab-chat] Failed to run cursor-agent", error);
