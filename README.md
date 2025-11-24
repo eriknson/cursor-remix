@@ -1,36 +1,34 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Shipflow Overlay
 
-## Getting Started
+The repository combines React Grab and Cursor Agent as `@shipflow/overlay`.
 
-First, run the development server:
+1. Install the package: `npm install -D @shipflow/overlay`.
+2. Wrap your Next.js config with `withShipflowOverlay`:
+   ```ts
+   // next.config.ts
+   import { withShipflowOverlay } from "@shipflow/overlay/next";
+   export default withShipflowOverlay({
+     // existing config
+   }, {
+     logClipboardEndpoint: "/api/log-clipboard",
+   });
+   ```
+3. Create `app/shipflow-overlay-provider.tsx`:
+   ```tsx
+   'use client';
+   import { FlowOverlayProvider } from "@shipflow/overlay";
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+   export function ShipflowOverlay() {
+     return <FlowOverlayProvider />;
+   }
+   ```
+4. Render the overlay in `app/layout.tsx` inside a dev-only guard.
+5. Add the Shipflow API handler at `app/api/shipflow/overlay/route.ts`:
+   ```ts
+   import { createNextHandler } from "@shipflow/overlay/next";
+   export const runtime = "nodejs";
+   export const dynamic = "force-dynamic";
+   export const POST = createNextHandler();
+   ```
+6. Make sure the `cursor-agent` CLI is installed and on your `PATH`, or set `CURSOR_AGENT_BIN`.
+7. Optionally run `npx shipflow-overlay init` to scaffold these files and add `.env` hints automatically.

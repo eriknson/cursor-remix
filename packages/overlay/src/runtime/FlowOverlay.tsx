@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -13,38 +14,32 @@ import {
 import { createPortal } from "react-dom";
 import { ArrowUp, Square, Command } from "lucide-react";
 
-import { cn } from "@/lib/utils";
+import { cn } from "./cn";
+import { DEFAULT_MODEL_OPTIONS, DEFAULT_STATUS_SEQUENCE } from "./constants";
+import type {
+  ModelOption,
+  SelectionPayload,
+  ShipflowOverlayConfig,
+  StatusAddonMode,
+  StatusSequence,
+  StreamEvent,
+} from "./types";
+import { loadReactGrabRuntime } from "./loadReactGrabRuntime";
+import {
+  registerClipboardInterceptor,
+  type ClipboardInterceptorOptions,
+} from "./registerClipboardInterceptor";
 
-type SelectionPayload = {
-  htmlFrame: string | null;
-  codeLocation: string | null;
-  filePath: string | null;
-  clipboardData: string;
-  pointer: {
-    x: number;
-    y: number;
-  } | null;
-  boundingRect: {
-    top: number;
-    left: number;
-    width: number;
-    height: number;
-  } | null;
+const HIGHLIGHT_QUERY = "[data-react-grab-chat-highlighted='true']";
+const EVENT_OPEN = "react-grab-chat:open";
+const EVENT_CLOSE = "react-grab-chat:close";
+const EVENT_UNDO = "react-grab-chat:undo";
+
+const DEFAULT_CONFIG: ShipflowOverlayConfig = {
+  endpoint: "/api/shipflow/overlay",
+  models: DEFAULT_MODEL_OPTIONS,
+  statusSequence: DEFAULT_STATUS_SEQUENCE,
 };
-
-type StatusAddonMode = "idle" | "progress" | "summary";
-
-type StreamEvent =
-  | { event: "status"; message: string }
-  | { event: "assistant"; text: string }
-  | {
-      event: "done";
-      success: boolean;
-      summary: string;
-      exitCode: number | null;
-      error?: string;
-      stderr?: string;
-    };
 
 type ChatState = SelectionPayload & {
   instruction: string;
@@ -56,140 +51,8 @@ type ChatState = SelectionPayload & {
   statusAddonMode: StatusAddonMode;
   statusLabel: string | null;
   statusContext: string | null;
+  useTypewriter: boolean;
   summary?: string;
-  statusStartedAt: number | null;
-  statusCompletedAt: number | null;
-};
-
-const STATUS_SEQUENCE = ["Thinking", "Planning next moves", "Updating UI"] as const;
-const MODEL_OPTIONS = [
-  { value: "composer-1", label: "Composer 1" },
-  { value: "gpt-5", label: "GPT-5" },
-  { value: "sonnet-4.5", label: "Sonnet 4.5" },
-  { value: "gemini-3", label: "Gemini 3" },
-] as const;
-
-const HIGHLIGHT_QUERY = "[data-react-grab-chat-highlighted='true']";
-const EVENT_OPEN = "react-grab-chat:open";
-const EVENT_CLOSE = "react-grab-chat:close";
-const EVENT_UNDO = "react-grab-chat:undo";
-
-function formatDuration(durationMs: number): string {
-  if (!Number.isFinite(durationMs)) {
-    return "0s";
-  }
-
-  const clamped = Math.max(0, durationMs);
-  if (clamped < 1000) {
-    return "<1s";
-  }
-
-  const totalSeconds = Math.floor(clamped / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  const segments: string[] = [];
-  if (hours > 0) {
-    segments.push(`${hours}h`);
-  }
-  if (minutes > 0) {
-    segments.push(`${minutes}m`);
-  }
-  if (segments.length < 2 && (seconds > 0 || segments.length === 0)) {
-    segments.push(`${seconds}s`);
-  }
-
-  return segments.join(" ");
-}
-
-function deriveActiveVerb(label: string | null): string {
-  if (!label) {
-    return "Working";
-  }
-
-  const normalized = label.toLowerCase();
-  if (normalized.includes("think")) {
-    return "Thinking";
-  }
-  if (normalized.includes("plan")) {
-    return "Planning";
-  }
-  if (normalized.includes("update") || normalized.includes("apply") || normalized.includes("build")) {
-    return "Updating";
-  }
-  if (normalized.includes("review") || normalized.includes("inspect") || normalized.includes("check")) {
-    return "Reviewing";
-  }
-  return "Working";
-}
-
-function formatActiveElapsed(label: string | null, durationMs: number): string {
-  return `${deriveActiveVerb(label)} for ${formatDuration(durationMs)}`;
-}
-
-function formatCompletedElapsed(durationMs: number): string {
-  return `Completed in ${formatDuration(durationMs)}`;
-}
-
-function useStatusElapsedLabel({
-  mode,
-  label,
-  startedAt,
-  completedAt,
-}: {
-  mode: StatusAddonMode;
-  label: string | null;
-  startedAt: number | null;
-  completedAt: number | null;
-}): string | null {
-  const [value, setValue] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (mode === "progress" && startedAt) {
-      const update = () => {
-        const elapsed = Date.now() - startedAt;
-        setValue(formatActiveElapsed(label, elapsed));
-      };
-
-      update();
-      const interval = window.setInterval(update, 1000);
-      return () => {
-        window.clearInterval(interval);
-      };
-    }
-
-    if (mode === "summary" && startedAt && completedAt) {
-      const elapsed = Math.max(0, completedAt - startedAt);
-      setValue(formatCompletedElapsed(elapsed));
-      return;
-    }
-
-    setValue(null);
-  }, [mode, label, startedAt, completedAt]);
-
-  return value;
-}
-
-const initialState: ChatState = {
-  htmlFrame: null,
-  codeLocation: null,
-  filePath: null,
-  clipboardData: "",
-  pointer: null,
-  boundingRect: null,
-  instruction: "",
-  status: "idle",
-  serverMessage: undefined,
-  error: undefined,
-  model: MODEL_OPTIONS[0].value,
-  statusPhase: 0,
-  statusAddonMode: "idle",
-  statusLabel: null,
-  statusContext: null,
-  summary: undefined,
-  statusStartedAt: null,
-  statusCompletedAt: null,
 };
 
 const DEFAULT_BUBBLE_STYLE: CSSProperties = {
@@ -203,6 +66,51 @@ const ANCHOR_GAP = 24;
 const POINTER_HORIZONTAL_GAP = 16;
 const POINTER_VERTICAL_OFFSET = 12;
 
+const createInitialState = (
+  models: readonly ModelOption[],
+  statusSequence: StatusSequence,
+): ChatState => ({
+  htmlFrame: null,
+  codeLocation: null,
+  filePath: null,
+  clipboardData: "",
+  pointer: null,
+  boundingRect: null,
+  instruction: "",
+  status: "idle",
+  serverMessage: undefined,
+  error: undefined,
+  model: models[0]?.value ?? "",
+  statusPhase: 0,
+  statusAddonMode: "idle",
+  statusLabel: statusSequence[0] ?? null,
+  statusContext: null,
+  useTypewriter: true,
+  summary: undefined,
+});
+
+export type FlowOverlayProps = Partial<ShipflowOverlayConfig> & {
+  enableClipboardInterceptor?: boolean;
+  clipboardOptions?: ClipboardInterceptorOptions;
+};
+
+function CursorIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 466.73 533.32"
+      className={className}
+      xmlns="http://www.w3.org/2000/svg"
+      shapeRendering="geometricPrecision"
+    >
+      <path fill="#72716d" d="M233.37,266.66l231.16,133.46c-1.42,2.46-3.48,4.56-6.03,6.03l-216.06,124.74c-5.61,3.24-12.53,3.24-18.14,0L8.24,406.15c-2.55-1.47-4.61-3.57-6.03-6.03l231.16-133.46h0Z" />
+      <path fill="#55544f" d="M233.37,0v266.66L2.21,400.12c-1.42-2.46-2.21-5.3-2.21-8.24v-250.44c0-5.89,3.14-11.32,8.24-14.27L224.29,2.43c2.81-1.62,5.94-2.43,9.07-2.43h.01Z" />
+      <path fill="#43413c" d="M464.52,133.2c-1.42-2.46-3.48-4.56-6.03-6.03L242.43,2.43c-2.8-1.62-5.93-2.43-9.06-2.43v266.66l231.16,133.46c1.42-2.46,2.21-5.3,2.21-8.24v-250.44c0-2.95-.78-5.77-2.21-8.24h-.01Z" />
+      <path fill="#d6d5d2" d="M448.35,142.54c1.31,2.26,1.49,5.16,0,7.74l-209.83,363.42c-1.41,2.46-5.16,1.45-5.16-1.38v-239.48c0-1.91-.51-3.75-1.44-5.36l216.42-124.95h.01Z" />
+      <path fill="#fff" d="M448.35,142.54l-216.42,124.95c-.92-1.6-2.26-2.96-3.92-3.92L20.62,143.83c-2.46-1.41-1.45-5.16,1.38-5.16h419.65c2.98,0,5.4,1.61,6.7,3.87Z" />
+    </svg>
+  );
+}
+
 function useSelectionEvents(
   onOpen: (payload: SelectionPayload) => void,
   onClose: () => void,
@@ -212,12 +120,11 @@ function useSelectionEvents(
     const handler = (event: Event) => {
       const custom = event as CustomEvent<SelectionPayload>;
       if (!custom.detail) return;
-      
-      // If chat is already open, close it first before opening a new one
+
       if (isOpen) {
         onClose();
       }
-      
+
       onOpen(custom.detail);
     };
 
@@ -247,9 +154,12 @@ function useRecalculateRect(
       }
 
       const rect = element.getBoundingClientRect();
+      const scrollX = window.scrollX;
+      const scrollY = window.scrollY;
+
       const nextRect = {
-        top: rect.top,
-        left: rect.left,
+        top: rect.top + scrollY,
+        left: rect.left + scrollX,
         width: rect.width,
         height: rect.height,
       };
@@ -332,7 +242,6 @@ function useClickOutside(
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
       if (ref.current && !ref.current.contains(target)) {
-        // Check if the click is not on the highlighted element
         const highlightedElement = document.querySelector(HIGHLIGHT_QUERY);
         if (!highlightedElement || !highlightedElement.contains(target)) {
           onClose();
@@ -340,12 +249,31 @@ function useClickOutside(
       }
     };
 
-    // Use capture phase to catch clicks before they bubble
     document.addEventListener("mousedown", handleClickOutside, true);
     return () => {
       document.removeEventListener("mousedown", handleClickOutside, true);
     };
   }, [ref, isOpen, onClose]);
+}
+
+function Typewriter({ text }: { text: string }) {
+  const [displayed, setDisplayed] = useState("");
+
+  useEffect(() => {
+    setDisplayed("");
+    let i = 0;
+    const timer = setInterval(() => {
+      if (i < text.length) {
+        setDisplayed(text.slice(0, i + 1));
+        i++;
+      } else {
+        clearInterval(timer);
+      }
+    }, 15);
+    return () => clearInterval(timer);
+  }, [text]);
+
+  return <>{displayed}</>;
 }
 
 function Bubble({
@@ -355,6 +283,8 @@ function Bubble({
   onStop,
   onModelChange,
   onClose,
+  modelOptions,
+  statusSequence,
 }: {
   chat: ChatState;
   onInstructionChange: (value: string) => void;
@@ -362,6 +292,8 @@ function Bubble({
   onStop: () => void;
   onModelChange: (value: string) => void;
   onClose: () => void;
+  modelOptions: readonly ModelOption[];
+  statusSequence: StatusSequence;
 }) {
   const anchor = chat.boundingRect;
   const bubbleRef = useRef<HTMLDivElement | null>(null);
@@ -413,6 +345,8 @@ function Bubble({
 
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
     const verticalGap = ANCHOR_GAP;
     const horizontalGap = ANCHOR_GAP;
 
@@ -450,8 +384,105 @@ function Bubble({
     };
 
     const pointer = chat.pointer;
+    let bestStyle: CSSProperties | null = null;
 
-    if (pointer) {
+    if (anchor) {
+      const anchorViewport = {
+        top: anchor.top - scrollY,
+        left: anchor.left - scrollX,
+        width: anchor.width,
+        height: anchor.height,
+      };
+
+      const anchorCenterX = anchorViewport.left + anchorViewport.width / 2;
+      const anchorCenterY = anchorViewport.top + anchorViewport.height / 2;
+
+      type CandidateName = "bottom" | "top" | "right" | "left";
+
+      type Candidate = {
+        name: CandidateName;
+        top: number;
+        left: number;
+        fits: boolean;
+        overflow: number;
+      };
+
+      const candidates: Candidate[] = [];
+
+      const bottomTop = anchorViewport.top + anchorViewport.height + verticalGap;
+      const bottomLeft = clampHorizontal(anchorCenterX - bubbleSize.width / 2);
+      candidates.push({
+        name: "bottom",
+        top: bottomTop,
+        left: bottomLeft,
+        fits: bottomTop + bubbleSize.height <= viewportHeight - VIEWPORT_MARGIN,
+        overflow: computeOverflow(bottomTop, bottomLeft),
+      });
+
+      const topTop = anchorViewport.top - verticalGap - bubbleSize.height;
+      const topLeft = clampHorizontal(anchorCenterX - bubbleSize.width / 2);
+      candidates.push({
+        name: "top",
+        top: topTop,
+        left: topLeft,
+        fits: topTop >= VIEWPORT_MARGIN,
+        overflow: computeOverflow(topTop, topLeft),
+      });
+
+      const rightLeft = anchorViewport.left + anchorViewport.width + horizontalGap;
+      const rightTop = clampVertical(anchorCenterY - bubbleSize.height / 2);
+      candidates.push({
+        name: "right",
+        top: rightTop,
+        left: rightLeft,
+        fits: rightLeft + bubbleSize.width <= viewportWidth - VIEWPORT_MARGIN,
+        overflow: computeOverflow(rightTop, rightLeft),
+      });
+
+      const leftLeft = anchorViewport.left - horizontalGap - bubbleSize.width;
+      const leftTop = clampVertical(anchorCenterY - bubbleSize.height / 2);
+      candidates.push({
+        name: "left",
+        top: leftTop,
+        left: leftLeft,
+        fits: leftLeft >= VIEWPORT_MARGIN,
+        overflow: computeOverflow(leftTop, leftLeft),
+      });
+
+      const baseOrder: CandidateName[] = ["bottom", "top", "right", "left"];
+      const orderedCandidates = baseOrder
+        .map((name) => candidates.find((candidate) => candidate.name === name))
+        .filter((candidate): candidate is Candidate => Boolean(candidate));
+
+      const perfectCandidate = orderedCandidates.find(
+        (candidate) => candidate.fits && candidate.overflow === 0,
+      );
+
+      if (perfectCandidate) {
+        bestStyle = {
+          top: `${Math.round(perfectCandidate.top + scrollY)}px`,
+          left: `${Math.round(perfectCandidate.left + scrollX)}px`,
+        };
+      } else if (!pointer) {
+        const bestCandidate =
+          orderedCandidates.find((candidate) => candidate.fits) ??
+          (orderedCandidates.length > 0
+            ? orderedCandidates.reduce(
+                (best, candidate) => (candidate.overflow < best.overflow ? candidate : best),
+                orderedCandidates[0],
+              )
+            : null);
+
+        if (bestCandidate) {
+          bestStyle = {
+            top: `${Math.round(bestCandidate.top + scrollY)}px`,
+            left: `${Math.round(bestCandidate.left + scrollX)}px`,
+          };
+        }
+      }
+    }
+
+    if (!bestStyle && pointer) {
       const pointerTopRaw = pointer.y - POINTER_VERTICAL_OFFSET;
       const clampedTop = clampVertical(pointerTopRaw);
 
@@ -466,112 +497,27 @@ function Bubble({
 
       const clampedLeft = clampHorizontal(targetLeft);
 
-      const nextStyle: CSSProperties = {
-        top: `${Math.round(clampedTop)}px`,
-        left: `${Math.round(clampedLeft)}px`,
+      bestStyle = {
+        top: `${Math.round(clampedTop + scrollY)}px`,
+        left: `${Math.round(clampedLeft + scrollX)}px`,
       };
+    }
 
+    if (bestStyle) {
       setBubbleStyle((prev) => {
-        if (prev.top === nextStyle.top && prev.left === nextStyle.left && !("transform" in prev)) {
+        if (
+          prev.top === bestStyle!.top &&
+          prev.left === bestStyle!.left &&
+          !("transform" in prev)
+        ) {
           return prev;
         }
-        return nextStyle;
+        return bestStyle!;
       });
       return;
     }
 
-    if (!anchor) {
-      setBubbleStyle((prev) => (prev === DEFAULT_BUBBLE_STYLE ? prev : DEFAULT_BUBBLE_STYLE));
-      return;
-    }
-
-    const anchorCenterX = anchor.left + anchor.width / 2;
-    const anchorCenterY = anchor.top + anchor.height / 2;
-
-    type CandidateName = "bottom" | "top" | "right" | "left";
-
-    type Candidate = {
-      name: CandidateName;
-      top: number;
-      left: number;
-      fits: boolean;
-      overflow: number;
-    };
-
-    const candidates: Candidate[] = [];
-
-    const bottomTop = anchor.top + anchor.height + verticalGap;
-    const bottomLeft = clampHorizontal(anchorCenterX - bubbleSize.width / 2);
-    candidates.push({
-      name: "bottom",
-      top: bottomTop,
-      left: bottomLeft,
-      fits: bottomTop + bubbleSize.height <= viewportHeight - VIEWPORT_MARGIN,
-      overflow: computeOverflow(bottomTop, bottomLeft),
-    });
-
-    const topTop = anchor.top - verticalGap - bubbleSize.height;
-    const topLeft = clampHorizontal(anchorCenterX - bubbleSize.width / 2);
-    candidates.push({
-      name: "top",
-      top: topTop,
-      left: topLeft,
-      fits: topTop >= VIEWPORT_MARGIN,
-      overflow: computeOverflow(topTop, topLeft),
-    });
-
-    const rightLeft = anchor.left + anchor.width + horizontalGap;
-    const rightTop = clampVertical(anchorCenterY - bubbleSize.height / 2);
-    candidates.push({
-      name: "right",
-      top: rightTop,
-      left: rightLeft,
-      fits: rightLeft + bubbleSize.width <= viewportWidth - VIEWPORT_MARGIN,
-      overflow: computeOverflow(rightTop, rightLeft),
-    });
-
-    const leftLeft = anchor.left - horizontalGap - bubbleSize.width;
-    const leftTop = clampVertical(anchorCenterY - bubbleSize.height / 2);
-    candidates.push({
-      name: "left",
-      top: leftTop,
-      left: leftLeft,
-      fits: leftLeft >= VIEWPORT_MARGIN,
-      overflow: computeOverflow(leftTop, leftLeft),
-    });
-
-    const baseOrder: CandidateName[] = ["bottom", "top", "right", "left"];
-    let orderedNames = baseOrder;
-
-    const orderedCandidates = orderedNames
-      .map((name) => candidates.find((candidate) => candidate.name === name))
-      .filter((candidate): candidate is Candidate => Boolean(candidate));
-
-    const bestCandidate =
-      orderedCandidates.find((candidate) => candidate.fits && candidate.overflow === 0) ??
-      orderedCandidates.find((candidate) => candidate.fits) ??
-      (orderedCandidates.length > 0
-        ? orderedCandidates.reduce((best, candidate) =>
-            candidate.overflow < best.overflow ? candidate : best,
-          orderedCandidates[0])
-        : null);
-
-    if (!bestCandidate) {
-      setBubbleStyle(DEFAULT_BUBBLE_STYLE);
-      return;
-    }
-
-    const nextStyle: CSSProperties = {
-      top: `${Math.round(bestCandidate.top)}px`,
-      left: `${Math.round(bestCandidate.left)}px`,
-    };
-
-    setBubbleStyle((prev) => {
-      if (prev.top === nextStyle.top && prev.left === nextStyle.left && !("transform" in prev)) {
-        return prev;
-      }
-      return nextStyle;
-    });
+    setBubbleStyle((prev) => (prev === DEFAULT_BUBBLE_STYLE ? prev : DEFAULT_BUBBLE_STYLE));
   }, [anchor, bubbleSize, chat.pointer]);
 
   const isSubmitting = chat.status === "submitting";
@@ -579,14 +525,7 @@ function Bubble({
   const showExpandedLayout = hasInput || chat.status !== "idle";
   const disableEditing = isSubmitting;
   const computedStatusLabel =
-    chat.statusLabel ?? STATUS_SEQUENCE[chat.statusPhase] ?? STATUS_SEQUENCE[0];
-
-  const statusElapsedLabel = useStatusElapsedLabel({
-    mode: chat.statusAddonMode,
-    label: computedStatusLabel,
-    startedAt: chat.statusStartedAt,
-    completedAt: chat.statusCompletedAt,
-  });
+    chat.statusLabel ?? statusSequence[chat.statusPhase] ?? statusSequence[0] ?? null;
 
   const handleUndo = useCallback(() => {
     if (chat.statusAddonMode !== "summary") {
@@ -643,24 +582,29 @@ function Bubble({
     <div
       ref={bubbleRef}
       className={cn(
-        "fixed z-[2147483647] flex w-full max-w-[480px] flex-col overflow-hidden rounded-3xl border border-white/20 bg-neutral-50/60 text-neutral-900 shadow-2xl backdrop-blur-2xl transition-all duration-200 ease-out dark:border-neutral-800/30 dark:bg-neutral-900/60 dark:text-neutral-50",
+        "absolute z-[2147483647] flex w-full max-w-[400px] flex-col overflow-hidden rounded-xl border border-neutral-200/40 bg-neutral-50/60 text-neutral-900 shadow-2xl backdrop-blur-2xl font-sans dark:border-neutral-700/40 dark:bg-neutral-900/60 dark:text-neutral-50",
+        "animate-in fade-in-0 zoom-in-95 duration-100 ease-out",
       )}
       style={bubbleStyle}
       role="dialog"
       aria-modal="true"
-      aria-label="Composer edit request"
+      aria-label="Shipflow overlay request"
       data-react-grab-chat-bubble="true"
       data-react-grab="true"
     >
-      {/* Main Content Area */}
-      <div className="flex w-full flex-col gap-4 p-4">
-        <div className="relative flex w-full items-start gap-3">
+      <div
+        className={cn(
+          "flex w-full flex-col p-3",
+          showExpandedLayout ? "gap-2" : "gap-0",
+        )}
+      >
+        <div className="relative flex w-full items-center gap-3">
           <textarea
             ref={textareaRef}
             data-react-grab-chat-input="true"
             rows={showExpandedLayout ? 2 : 1}
             className={cn(
-              "w-full resize-none bg-transparent text-lg font-medium leading-relaxed text-neutral-800 placeholder:text-neutral-400 outline-none dark:text-neutral-100 dark:placeholder:text-neutral-500",
+              "w-full resize-none bg-transparent text-sm font-normal leading-relaxed text-neutral-800 placeholder:text-neutral-400 outline-none dark:text-neutral-100 dark:placeholder:text-neutral-500",
               disableEditing && "opacity-50",
               !showExpandedLayout && "pr-10",
             )}
@@ -677,33 +621,33 @@ function Bubble({
               onClick={onSubmit}
               disabled={!hasInput || isSubmitting}
               className={cn(
-                "absolute right-0 top-0 flex h-8 w-8 items-center justify-center rounded-full bg-neutral-300/50 text-neutral-600 transition hover:bg-neutral-300/80 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-neutral-700/50 dark:text-neutral-300 dark:hover:bg-neutral-700/80",
+                "absolute right-0 top-1/2 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-full bg-neutral-300/50 text-neutral-600 transition hover:bg-neutral-300/80 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-neutral-700/50 dark:text-neutral-300 dark:hover:bg-neutral-700/80",
               )}
             >
-              <ArrowUp className="h-5 w-5" />
+              <ArrowUp className="h-4 w-4" />
             </button>
           ) : null}
         </div>
 
         {showExpandedLayout ? (
           <div className="flex items-center justify-between animate-in fade-in slide-in-from-top-1 duration-150 ease-out">
-            <div className="relative">
+            <div className="relative inline-flex">
               <select
                 aria-label="Model selection"
                 className={cn(
-                  "h-8 w-auto min-w-[120px] appearance-none rounded-lg bg-neutral-200/50 px-3 pr-8 text-sm font-medium text-neutral-700 transition focus:outline-none focus:ring-2 focus:ring-neutral-300/50 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-neutral-800/50 dark:text-neutral-200 dark:focus:ring-neutral-700/50",
+                  "h-8 w-auto appearance-none rounded-lg bg-neutral-200/50 pl-3 pr-[26px] text-xs font-medium text-neutral-500 transition hover:bg-neutral-200/70 focus:outline-none focus:ring-2 focus:ring-neutral-300/50 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-neutral-800/50 dark:text-neutral-400 dark:hover:bg-neutral-800/70 dark:focus:ring-neutral-700/50",
                 )}
                 value={chat.model}
                 onChange={(event) => onModelChange(event.target.value)}
                 disabled={disableEditing}
               >
-                {MODEL_OPTIONS.map((option) => (
+                {modelOptions.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
                   </option>
                 ))}
               </select>
-              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-neutral-500 dark:text-neutral-400">
+              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-neutral-400 dark:text-neutral-500">
                 <svg width="10" height="6" viewBox="0 0 10 6" fill="none">
                   <path d="M1 1l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
@@ -719,36 +663,41 @@ function Bubble({
                 isSubmitting
                   ? "bg-neutral-900 text-white hover:bg-neutral-800 dark:bg-white dark:text-black dark:hover:bg-neutral-200"
                   : "bg-neutral-900 text-white shadow-lg hover:bg-neutral-800 hover:scale-105 dark:bg-white dark:text-black dark:hover:bg-neutral-200",
-                (!hasInput && !isSubmitting) && "opacity-0 pointer-events-none"
+                !hasInput && !isSubmitting && "opacity-0 pointer-events-none",
               )}
             >
               {isSubmitting ? (
                 <Square className="h-3 w-3 fill-current" />
               ) : (
-                <ArrowUp className="h-5 w-5" />
+                <ArrowUp className="h-4 w-4" />
               )}
             </button>
           </div>
         ) : null}
       </div>
 
-      {/* Status/Summary Bar */}
       {chat.statusAddonMode !== "idle" && (
-        <div className="flex w-full flex-col border-t border-neutral-200/30 bg-neutral-100/30 px-4 py-3 backdrop-blur-xl dark:border-neutral-800/30 dark:bg-neutral-900/30 animate-in fade-in slide-in-from-top-1 duration-150 ease-out">
+        <div className="flex w-full flex-col border-t border-neutral-200/30 bg-neutral-100/30 px-3 py-2 backdrop-blur-xl dark:border-neutral-800/30 dark:bg-neutral-900/30 animate-in fade-in slide-in-from-top-1 duration-150 ease-out">
           {chat.statusAddonMode === "progress" ? (
-            <div className="flex items-center justify-between text-xs font-medium">
-              <span className="text-neutral-600 dark:text-neutral-400">
-                 {chat.statusContext || computedStatusLabel}
-              </span>
-              <span className="text-neutral-400 dark:text-neutral-500">
-                {statusElapsedLabel ? statusElapsedLabel.replace("Working", "Thought") : "Thinking..."}
-              </span>
+            <div className="flex items-center justify-between gap-3 text-xs font-medium">
+              <div className="flex items-center gap-2 shrink-0">
+                <CursorIcon className="h-3.5 w-3.5 animate-pulse-subtle" />
+                <span className="bg-gradient-to-r from-neutral-600 via-neutral-600/40 to-neutral-600 bg-[length:200%_100%] bg-clip-text text-transparent animate-shimmer dark:from-neutral-400 dark:via-neutral-400/40 dark:to-neutral-400 opacity-60">
+                  {computedStatusLabel}
+                </span>
+              </div>
+              {chat.statusContext && (
+                <span className="min-w-0 flex-1 truncate text-right text-neutral-400 dark:text-neutral-500">
+                  {chat.useTypewriter ? <Typewriter text={chat.statusContext} /> : chat.statusContext}
+                </span>
+              )}
             </div>
           ) : chat.statusAddonMode === "summary" && chat.summary ? (
-             <div className="flex items-center justify-between text-xs font-medium">
-              <span className="text-neutral-600 dark:text-neutral-400">
-                {chat.summary}
-              </span>
+            <div className="flex items-center justify-between text-xs font-medium">
+              <div className="flex items-center gap-2 text-neutral-600 dark:text-neutral-400">
+                <CursorIcon className="h-3.5 w-3.5" />
+                <span>Changes applied</span>
+              </div>
               <div className="flex items-center gap-3">
                 <button
                   type="button"
@@ -764,7 +713,7 @@ function Bubble({
       )}
 
       {chat.error ? (
-        <div className="border-t border-red-200/50 bg-red-50/50 px-4 py-3 text-xs font-medium text-red-600 backdrop-blur-xl dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
+        <div className="border-t border-red-200/50 bg-red-50/50 px-3 py-2 text-xs font-medium text-red-600 backdrop-blur-xl dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
           {chat.error}
         </div>
       ) : null}
@@ -772,9 +721,69 @@ function Bubble({
   );
 }
 
-export function ReactGrabChatOverlay() {
+export function FlowOverlayProvider(props: FlowOverlayProps = {}) {
+  const clipboardOptions = useMemo(
+    () => props.clipboardOptions ?? {},
+    [props.clipboardOptions],
+  );
+
+  const config = useMemo<ShipflowOverlayConfig>(() => {
+    const models =
+      props.models && props.models.length > 0 ? props.models : DEFAULT_CONFIG.models;
+    const statusSequence =
+      props.statusSequence && props.statusSequence.length > 0
+        ? props.statusSequence
+        : DEFAULT_CONFIG.statusSequence;
+    const endpoint = props.endpoint ?? DEFAULT_CONFIG.endpoint;
+
+    return {
+      endpoint,
+      models,
+      statusSequence,
+    };
+  }, [props.endpoint, props.models, props.statusSequence]);
+
   const [chat, setChat] = useState<ChatState | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const fallbackStatusLabel = config.statusSequence[0] ?? null;
+
+  useEffect(() => {
+    if (props.enableClipboardInterceptor === false) {
+      return;
+    }
+
+    let cleanup: (() => void) | undefined;
+
+    loadReactGrabRuntime({
+      url: clipboardOptions.reactGrabUrl,
+    })
+      .then(() => {
+        cleanup = registerClipboardInterceptor({
+          projectRoot: clipboardOptions.projectRoot,
+          highlightColor: clipboardOptions.highlightColor,
+          highlightStyleId: clipboardOptions.highlightStyleId,
+          logClipboardEndpoint:
+            clipboardOptions.logClipboardEndpoint ??
+            process.env.SHIPFLOW_OVERLAY_LOG_ENDPOINT ??
+            null,
+          reactGrabUrl: clipboardOptions.reactGrabUrl,
+        });
+      })
+      .catch((error) => {
+        console.error("[shipflow-overlay] Failed to load React Grab runtime", error);
+      });
+
+    return () => {
+      cleanup?.();
+    };
+  }, [
+    clipboardOptions.highlightColor,
+    clipboardOptions.highlightStyleId,
+    clipboardOptions.logClipboardEndpoint,
+    clipboardOptions.projectRoot,
+    clipboardOptions.reactGrabUrl,
+    props.enableClipboardInterceptor,
+  ]);
 
   const close = useCallback(() => {
     if (abortControllerRef.current) {
@@ -783,15 +792,23 @@ export function ReactGrabChatOverlay() {
     }
     setChat(null);
     window.dispatchEvent(new Event(EVENT_CLOSE));
-  }, [abortControllerRef]);
+  }, []);
+
+  const buildInitialState = useCallback(
+    () => createInitialState(config.models, config.statusSequence),
+    [config.models, config.statusSequence],
+  );
 
   useSelectionEvents(
-    useCallback((payload: SelectionPayload) => {
-      setChat({
-        ...initialState,
-        ...payload,
-      });
-    }, []),
+    useCallback(
+      (payload: SelectionPayload) => {
+        setChat({
+          ...buildInitialState(),
+          ...payload,
+        });
+      },
+      [buildInitialState],
+    ),
     close,
     Boolean(chat),
   );
@@ -812,7 +829,7 @@ export function ReactGrabChatOverlay() {
       abortControllerRef.current = controller;
 
       const promotePhase = (phase: number) => {
-        const safePhase = Math.min(Math.max(phase, 0), STATUS_SEQUENCE.length - 1);
+        const safePhase = Math.min(Math.max(phase, 0), config.statusSequence.length - 1);
         setChat((prev) => {
           if (!prev) return prev;
           if (prev.statusPhase === safePhase && prev.statusLabel) {
@@ -821,13 +838,13 @@ export function ReactGrabChatOverlay() {
           return {
             ...prev,
             statusPhase: safePhase,
-            statusLabel: STATUS_SEQUENCE[safePhase],
+            statusLabel: config.statusSequence[safePhase] ?? fallbackStatusLabel,
           };
         });
       };
 
       try {
-        const response = await fetch("/api/react-grab-edit", {
+        const response = await fetch(config.endpoint, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -869,6 +886,7 @@ export function ReactGrabChatOverlay() {
                   ? {
                       ...prev,
                       statusContext: message,
+                      useTypewriter: true,
                     }
                   : prev,
               );
@@ -892,6 +910,7 @@ export function ReactGrabChatOverlay() {
                   ? {
                       ...prev,
                       statusContext: chunk,
+                      useTypewriter: false,
                     }
                   : prev,
               );
@@ -910,13 +929,12 @@ export function ReactGrabChatOverlay() {
                   ? {
                       ...prev,
                       status: "success",
-                      instruction: "", // Clear instruction on success
+                      instruction: "",
                       statusAddonMode: "summary",
                       summary,
                       statusLabel: null,
                       statusContext: null,
-                      statusPhase: STATUS_SEQUENCE.length - 1,
-                      statusCompletedAt: Date.now(),
+                      statusPhase: Math.max(config.statusSequence.length - 1, 0),
                       serverMessage: event.stderr ? event.stderr.trim() : prev.serverMessage,
                     }
                   : prev,
@@ -933,7 +951,6 @@ export function ReactGrabChatOverlay() {
                       statusContext: null,
                       summary: undefined,
                       statusPhase: 0,
-                      statusCompletedAt: Date.now(),
                       serverMessage: event.stderr ? event.stderr.trim() : prev.serverMessage,
                     }
                   : prev,
@@ -958,7 +975,7 @@ export function ReactGrabChatOverlay() {
               try {
                 processEvent(JSON.parse(line) as StreamEvent);
               } catch (error) {
-                console.warn("[react-grab-chat] Unable to parse stream line", { line, error });
+                console.warn("[shipflow-overlay] Unable to parse stream line", { line, error });
               }
             }
             newlineIndex = buffer.indexOf("\n");
@@ -971,7 +988,7 @@ export function ReactGrabChatOverlay() {
           try {
             processEvent(JSON.parse(finalLine) as StreamEvent);
           } catch (error) {
-            console.warn("[react-grab-chat] Unable to parse final stream line", { finalLine, error });
+            console.warn("[shipflow-overlay] Unable to parse final stream line", { finalLine, error });
           }
         }
       } catch (error) {
@@ -988,15 +1005,13 @@ export function ReactGrabChatOverlay() {
                   error: undefined,
                   serverMessage: undefined,
                   statusPhase: 0,
-                  statusStartedAt: null,
-                  statusCompletedAt: null,
                 }
               : prev,
           );
           return;
         }
 
-        console.error("[react-grab-chat] Failed to communicate with Cursor CLI backend", error);
+        console.error("[shipflow-overlay] Failed to communicate with Cursor CLI backend", error);
         setChat((prev) =>
           prev
             ? {
@@ -1007,7 +1022,6 @@ export function ReactGrabChatOverlay() {
                 statusLabel: null,
                 statusContext: null,
                 summary: undefined,
-                statusCompletedAt: Date.now(),
               }
             : prev,
         );
@@ -1017,55 +1031,50 @@ export function ReactGrabChatOverlay() {
         }
       }
     },
-    [abortControllerRef],
+    [config.endpoint, config.models, config.statusSequence, fallbackStatusLabel],
   );
 
-  const onInstructionChange = useCallback(
-    (value: string) => {
-      setChat((current) => {
-        if (!current) {
-          return current;
-        }
+  const onInstructionChange = useCallback((value: string) => {
+    setChat((current) => {
+      if (!current) {
+        return current;
+      }
 
-        const next: ChatState = {
-          ...current,
-          instruction: value,
-        };
+      const next: ChatState = {
+        ...current,
+        instruction: value,
+      };
 
-        if (current.status !== "submitting") {
-          next.status = "idle";
-          next.statusStartedAt = null;
-          next.statusCompletedAt = null;
-        }
+      if (current.status !== "submitting") {
+        next.status = "idle";
+      }
 
-        // If user starts typing, clear the summary/error mode immediately
-        if (value.length > 0 && current.statusAddonMode !== "idle") {
-          next.statusAddonMode = "idle";
-          next.statusLabel = null;
-          next.statusContext = null;
-          next.summary = undefined;
-          next.statusPhase = 0;
-          next.statusCompletedAt = null;
-        }
+      if (value.length > 0 && current.statusAddonMode !== "idle") {
+        next.statusAddonMode = "idle";
+        next.statusLabel = null;
+        next.statusContext = null;
+        next.summary = undefined;
+        next.statusPhase = 0;
+      }
 
-        if (current.status === "error") {
-          next.error = undefined;
-        }
+      if (current.status === "error") {
+        next.error = undefined;
+      }
 
-        return next;
-      });
-    },
-    [setChat],
-  );
+      return next;
+    });
+  }, []);
 
   const onSubmit = useCallback(() => {
-    let payload: {
-      filePath: string | null;
-      htmlFrame: string | null;
-      stackTrace: string | null;
-      instruction: string;
-      model: string;
-    } | null = null;
+    let payload:
+      | {
+          filePath: string | null;
+          htmlFrame: string | null;
+          stackTrace: string | null;
+          instruction: string;
+          model: string;
+        }
+      | null = null;
 
     setChat((current) => {
       if (!current) return current;
@@ -1083,8 +1092,6 @@ export function ReactGrabChatOverlay() {
           summary: undefined,
           statusPhase: 0,
           serverMessage: undefined,
-          statusStartedAt: null,
-          statusCompletedAt: null,
         };
       }
 
@@ -1093,7 +1100,7 @@ export function ReactGrabChatOverlay() {
         htmlFrame: current.htmlFrame,
         stackTrace: current.codeLocation,
         instruction: trimmed,
-        model: current.model,
+        model: current.model || config.models[0]?.value || "",
       };
 
       return {
@@ -1103,25 +1110,23 @@ export function ReactGrabChatOverlay() {
         error: undefined,
         serverMessage: undefined,
         statusAddonMode: "progress",
-        statusLabel: STATUS_SEQUENCE[0],
+        statusLabel: config.statusSequence[0] ?? fallbackStatusLabel,
         statusContext: "Preparing Cursor CLI request…",
         summary: undefined,
         statusPhase: 0,
-        statusStartedAt: Date.now(),
-        statusCompletedAt: null,
       };
     });
 
     if (payload) {
       void sendToBackend(payload);
     }
-  }, [sendToBackend]);
+  }, [config.models, config.statusSequence, fallbackStatusLabel, sendToBackend]);
 
   const stop = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
-  }, [abortControllerRef]);
+  }, []);
 
   const onModelChange = useCallback(
     (value: string) => {
@@ -1129,10 +1134,13 @@ export function ReactGrabChatOverlay() {
         if (!current || current.status === "submitting") {
           return current;
         }
-        return { ...current, model: value };
+        const nextValue = config.models.some((option) => option.value === value)
+          ? value
+          : config.models[0]?.value ?? "";
+        return { ...current, model: nextValue };
       });
     },
-    [setChat],
+    [config.models],
   );
 
   const bubble = chat ? (
@@ -1143,6 +1151,8 @@ export function ReactGrabChatOverlay() {
       onStop={stop}
       onModelChange={onModelChange}
       onClose={close}
+      modelOptions={config.models}
+      statusSequence={config.statusSequence}
     />
   ) : null;
 
@@ -1150,3 +1160,5 @@ export function ReactGrabChatOverlay() {
 
   return createPortal(bubble, document.body);
 }
+
+export { Typewriter };
