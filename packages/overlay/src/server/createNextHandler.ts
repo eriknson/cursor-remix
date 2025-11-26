@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import type { StreamEvent } from "../runtime/types";
 // Import constants, including STREAM_HEADERS
 import { STREAM_HEADERS } from "../runtime/constants";
+import { undoManager } from "./undoManager";
 
 export type ShipflowOverlayRequestPayload = {
   filePath: string | null;
@@ -283,6 +284,18 @@ export function createNextHandler(options: ShipflowOverlayServerOptions = {}) {
           logPrefix,
         }),
       );
+
+      // Create undo session and capture workspace state before running agent
+      const sessionId = undoManager.createSession(instruction, normalizedFilePath);
+      const cwd = process.cwd();
+      
+      try {
+        await undoManager.captureWorkspace(sessionId, cwd);
+      } catch (captureError) {
+        console.warn(`${logPrefix} Failed to capture workspace for undo:`, captureError);
+        // Continue anyway - undo just won't work for this session
+      }
+
       const encoder = new TextEncoder();
 
       const stream = new ReadableStream({
@@ -314,6 +327,8 @@ export function createNextHandler(options: ShipflowOverlayServerOptions = {}) {
             }
           });
 
+          // Send session ID first so frontend can use it for undo
+          send({ event: "session", sessionId });
           send({ event: "status", message: "Understanding user intent" });
 
           try {
@@ -373,3 +388,6 @@ export function createNextHandler(options: ShipflowOverlayServerOptions = {}) {
     }
   };
 }
+
+// Re-export undoManager for use in undo handler
+export { undoManager } from "./undoManager";

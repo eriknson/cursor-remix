@@ -12,15 +12,15 @@ import {
 
 export function SectionCards() {
   return (
-    <div className="grid grid-cols-1 gap-4 px-4 lg:px-6 @xl/main:grid-cols-2 @5xl/main:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 px-4 lg:px-6 py-4 @xl/main:grid-cols-2 @5xl/main:grid-cols-4">
       <Card>
         <CardHeader>
-          <CardDescription>Trending Customers</CardDescription>
+          <CardDescription>Revenue</CardDescription>
           <CardTitle className="text-2xl">$1,200.00</CardTitle>
           <CardAction>
             <Badge variant="outline">
               <IconTrendingUp className="mr-1 h-3 w-3" />
-              +50%
+              50%
             </Badge>
           </CardAction>
         </CardHeader>
@@ -55,12 +55,12 @@ export function SectionCards() {
       </Card>
       <Card>
         <CardHeader>
-          <CardDescription>Active Accounts</CardDescription>
+          <CardDescription>Active Users</CardDescription>
           <CardTitle className="text-2xl">45,678</CardTitle>
           <CardAction>
             <Badge variant="outline">
               <IconTrendingUp className="mr-1 h-3 w-3" />
-              +50%
+              50%
             </Badge>
           </CardAction>
         </CardHeader>

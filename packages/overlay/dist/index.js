@@ -3,9 +3,9 @@ import {
   DEFAULT_STATUS_SEQUENCE
 } from "./chunk-LHE54KC7.js";
 import {
-  loadReactGrabRuntime,
-  registerClipboardInterceptor
-} from "./chunk-JXYVODP6.js";
+  disposeReactGrab,
+  initReactGrab
+} from "./chunk-57H4ZARC.js";
 
 // src/runtime/FlowOverlay.tsx
 import {
@@ -432,6 +432,31 @@ var ensureOverlayStyles = (root) => {
   0%, 100% { opacity: 0.6; }
   50% { opacity: 0.25; }
 }
+
+[data-sf-mini-status="true"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--sf-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--sf-border);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--sf-muted-text);
+  cursor: pointer;
+  z-index: 2147483646;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  animation: shipflow-fade-in 120ms ease-out;
+  pointer-events: auto;
+}
+
+[data-sf-mini-status="true"]:hover {
+  background: var(--sf-bg);
+  border-color: var(--sf-border);
+}
 `;
   const target = root instanceof Document ? (_c = (_b = (_a = root.head) != null ? _a : root.body) != null ? _b : root.documentElement) != null ? _c : root : root;
   target.appendChild(style);
@@ -515,6 +540,56 @@ function CursorIcon({ loading }) {
         /* @__PURE__ */ jsx("path", { fill: "#43413c", d: "M464.52,133.2c-1.42-2.46-3.48-4.56-6.03-6.03L242.43,2.43c-2.8-1.62-5.93-2.43-9.06-2.43v266.66l231.16,133.46c1.42-2.46,2.21-5.3,2.21-8.24v-250.44c0-2.95-.78-5.77-2.21-8.24h-.01Z" }),
         /* @__PURE__ */ jsx("path", { fill: "#d6d5d2", d: "M448.35,142.54c1.31,2.26,1.49,5.16,0,7.74l-209.83,363.42c-1.41,2.46-5.16,1.45-5.16-1.38v-239.48c0-1.91-.51-3.75-1.44-5.36l216.42-124.95h.01Z" }),
         /* @__PURE__ */ jsx("path", { fill: "#fff", d: "M448.35,142.54l-216.42,124.95c-.92-1.6-2.26-2.96-3.92-3.92L20.62,143.83c-2.46-1.41-1.45-5.16,1.38-5.16h419.65c2.98,0,5.4,1.61,6.7,3.87Z" })
+      ]
+    }
+  );
+}
+function MiniStatus({
+  label,
+  onClick
+}) {
+  const [position, setPosition] = useState(null);
+  useEffect(() => {
+    const updatePosition = () => {
+      const highlighted = document.querySelector(HIGHLIGHT_QUERY);
+      if (!highlighted) return;
+      const rect = highlighted.getBoundingClientRect();
+      setPosition({
+        top: rect.top - 8,
+        left: rect.left + rect.width / 2
+      });
+    };
+    updatePosition();
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, []);
+  if (!position) return null;
+  const style = {
+    position: "fixed",
+    top: position.top,
+    left: position.left,
+    transform: "translate(-50%, -100%)"
+  };
+  return /* @__PURE__ */ jsxs(
+    "div",
+    {
+      style,
+      "data-sf-mini-status": "true",
+      onClick,
+      role: "button",
+      tabIndex: 0,
+      onKeyDown: (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          onClick();
+        }
+      },
+      children: [
+        /* @__PURE__ */ jsx(CursorIcon, { loading: true }),
+        /* @__PURE__ */ jsx("span", { "data-sf-shimmer": "true", children: label })
       ]
     }
   );
@@ -651,6 +726,7 @@ function Bubble({
   onStop,
   onModelChange,
   onClose,
+  onUndo,
   modelOptions,
   statusSequence
 }) {
@@ -741,13 +817,25 @@ function Bubble({
     };
     const pointer = chat.pointer;
     let bestStyle = null;
-    if (anchor) {
-      const anchorViewport = {
+    const highlightedElement = document.querySelector(HIGHLIGHT_QUERY);
+    let anchorViewport = null;
+    if (highlightedElement) {
+      const rect = highlightedElement.getBoundingClientRect();
+      anchorViewport = {
+        top: rect.top,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height
+      };
+    } else if (anchor) {
+      anchorViewport = {
         top: anchor.top - scrollY,
         left: anchor.left - scrollX,
         width: anchor.width,
         height: anchor.height
       };
+    }
+    if (anchorViewport) {
       const anchorCenterX = anchorViewport.left + anchorViewport.width / 2;
       const anchorCenterY = anchorViewport.top + anchorViewport.height / 2;
       const candidates = [];
@@ -847,16 +935,18 @@ function Bubble({
     if (chat.statusAddonMode !== "summary") {
       return;
     }
+    onUndo();
     window.dispatchEvent(
       new CustomEvent(EVENT_UNDO, {
         detail: {
           instruction: chat.instruction,
           summary: (_a2 = chat.summary) != null ? _a2 : null,
-          filePath: chat.filePath
+          filePath: chat.filePath,
+          sessionId: chat.sessionId
         }
       })
     );
-  }, [chat]);
+  }, [chat, onUndo]);
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -1002,7 +1092,7 @@ function Bubble({
   );
 }
 function FlowOverlayProvider(props = {}) {
-  var _a;
+  var _a, _b;
   const [portalTarget, setPortalTarget] = useState(null);
   const overlayContainerRef = useRef(null);
   useEffect(() => {
@@ -1061,44 +1151,43 @@ function FlowOverlayProvider(props = {}) {
     };
   }, [props.endpoint, props.models, props.statusSequence]);
   const [chat, setChat] = useState(null);
+  const [bubbleOpen, setBubbleOpen] = useState(false);
   const abortControllerRef = useRef(null);
   const fallbackStatusLabel = (_a = config.statusSequence[0]) != null ? _a : null;
   useEffect(() => {
     if (props.enableClipboardInterceptor === false) {
       return;
     }
-    let cleanup;
-    loadReactGrabRuntime({
-      url: clipboardOptions.reactGrabUrl
-    }).then(() => {
-      var _a2, _b;
-      cleanup = registerClipboardInterceptor({
-        projectRoot: clipboardOptions.projectRoot,
-        highlightColor: clipboardOptions.highlightColor,
-        highlightStyleId: clipboardOptions.highlightStyleId,
-        logClipboardEndpoint: (_b = (_a2 = clipboardOptions.logClipboardEndpoint) != null ? _a2 : process.env.SHIPFLOW_OVERLAY_LOG_ENDPOINT) != null ? _b : null,
-        reactGrabUrl: clipboardOptions.reactGrabUrl
-      });
+    let mounted = true;
+    initReactGrab({
+      projectRoot: clipboardOptions.projectRoot,
+      highlightColor: clipboardOptions.highlightColor,
+      highlightStyleId: clipboardOptions.highlightStyleId
     }).catch((error) => {
-      console.error("[shipflow-overlay] Failed to load React Grab runtime", error);
+      if (mounted) {
+        console.error("[shipflow-overlay] Failed to initialize React Grab:", error);
+      }
     });
     return () => {
-      cleanup == null ? void 0 : cleanup();
+      mounted = false;
+      disposeReactGrab();
     };
   }, [
     clipboardOptions.highlightColor,
     clipboardOptions.highlightStyleId,
-    clipboardOptions.logClipboardEndpoint,
     clipboardOptions.projectRoot,
-    clipboardOptions.reactGrabUrl,
     props.enableClipboardInterceptor
   ]);
   const close = useCallback(() => {
+    setBubbleOpen(false);
+  }, []);
+  const reset = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
     setChat(null);
+    setBubbleOpen(false);
     window.dispatchEvent(new Event(EVENT_CLOSE));
   }, []);
   const buildInitialState = useCallback(
@@ -1112,18 +1201,80 @@ function FlowOverlayProvider(props = {}) {
           ...buildInitialState(),
           ...payload
         });
+        setBubbleOpen(true);
       },
       [buildInitialState]
     ),
-    close,
+    reset,
+    // Use reset (not close) when a new selection is made to abort any previous request
     Boolean(chat)
   );
   useRecalculateRect(chat, setChat);
-  useEscapeToClose(Boolean(chat), close);
-  useAutoFocus(Boolean(chat), portalTarget);
+  useEscapeToClose(bubbleOpen, close);
+  useAutoFocus(bubbleOpen, portalTarget);
+  useEffect(() => {
+    const isLoading = (chat == null ? void 0 : chat.status) === "submitting";
+    const highlighted = document.querySelector(HIGHLIGHT_QUERY);
+    const SHIMMER_ID = "sf-shimmer-overlay";
+    const existingOverlay = document.getElementById(SHIMMER_ID);
+    if (existingOverlay) {
+      existingOverlay.remove();
+    }
+    if (highlighted) {
+      if (isLoading) {
+        highlighted.setAttribute("data-react-grab-loading", "true");
+        const overlay = document.createElement("div");
+        overlay.id = SHIMMER_ID;
+        overlay.setAttribute("data-sf-shimmer-overlay", "true");
+        document.body.appendChild(overlay);
+        const updatePosition = () => {
+          const rect = highlighted.getBoundingClientRect();
+          overlay.style.top = `${rect.top}px`;
+          overlay.style.left = `${rect.left}px`;
+          overlay.style.width = `${rect.width}px`;
+          overlay.style.height = `${rect.height}px`;
+        };
+        updatePosition();
+        const scrollHandler = () => updatePosition();
+        const resizeHandler = () => updatePosition();
+        window.addEventListener("scroll", scrollHandler, true);
+        window.addEventListener("resize", resizeHandler);
+        return () => {
+          window.removeEventListener("scroll", scrollHandler, true);
+          window.removeEventListener("resize", resizeHandler);
+          overlay.remove();
+          highlighted.removeAttribute("data-react-grab-loading");
+        };
+      } else {
+        highlighted.removeAttribute("data-react-grab-loading");
+      }
+    }
+    return () => {
+      const el = document.querySelector(HIGHLIGHT_QUERY);
+      el == null ? void 0 : el.removeAttribute("data-react-grab-loading");
+      const overlay = document.getElementById(SHIMMER_ID);
+      overlay == null ? void 0 : overlay.remove();
+    };
+  }, [chat == null ? void 0 : chat.status]);
+  useEffect(() => {
+    if (!chat || bubbleOpen) return;
+    const highlighted = document.querySelector(HIGHLIGHT_QUERY);
+    if (!highlighted) return;
+    const handleClick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setBubbleOpen(true);
+    };
+    highlighted.addEventListener("click", handleClick, true);
+    highlighted.style.cursor = "pointer";
+    return () => {
+      highlighted.removeEventListener("click", handleClick, true);
+      highlighted.style.cursor = "";
+    };
+  }, [chat, bubbleOpen]);
   const sendToBackend = useCallback(
     async (payload) => {
-      var _a2, _b;
+      var _a2, _b2;
       const controller = new AbortController();
       abortControllerRef.current = controller;
       const promotePhase = (phase) => {
@@ -1154,7 +1305,7 @@ function FlowOverlayProvider(props = {}) {
           const data = await response.json().catch(() => null);
           throw new Error((_a2 = data == null ? void 0 : data.error) != null ? _a2 : `Request failed with status ${response.status}`);
         }
-        const reader = (_b = response.body) == null ? void 0 : _b.getReader();
+        const reader = (_b2 = response.body) == null ? void 0 : _b2.getReader();
         if (!reader) {
           throw new Error("Streaming response is not supported in this environment.");
         }
@@ -1164,7 +1315,18 @@ function FlowOverlayProvider(props = {}) {
         let hasPromotedPlanning = false;
         let hasPromotedUpdating = false;
         const processEvent = (event) => {
-          var _a3, _b2, _c;
+          var _a3, _b3, _c;
+          if (event.event === "session") {
+            setChat(
+              (prev) => prev ? {
+                ...prev,
+                sessionId: event.sessionId,
+                undoStatus: "idle",
+                undoMessage: void 0
+              } : prev
+            );
+            return;
+          }
           if (event.event === "status") {
             const message = (_a3 = event.message) == null ? void 0 : _a3.trim();
             if (message) {
@@ -1190,7 +1352,7 @@ function FlowOverlayProvider(props = {}) {
             return;
           }
           if (event.event === "assistant") {
-            const chunk = (_b2 = event.text) == null ? void 0 : _b2.trim();
+            const chunk = (_b3 = event.text) == null ? void 0 : _b3.trim();
             if (chunk) {
               assistantSummary += chunk.endsWith("\n") ? chunk : `${chunk} `;
               if (!hasPromotedPlanning) {
@@ -1339,7 +1501,7 @@ function FlowOverlayProvider(props = {}) {
   const onSubmit = useCallback(() => {
     let payload = null;
     setChat((current) => {
-      var _a2, _b;
+      var _a2, _b2;
       if (!current) return current;
       if (current.status === "submitting") return current;
       const trimmed = current.instruction.trim();
@@ -1370,7 +1532,7 @@ function FlowOverlayProvider(props = {}) {
         error: void 0,
         serverMessage: void 0,
         statusAddonMode: "progress",
-        statusLabel: (_b = config.statusSequence[0]) != null ? _b : fallbackStatusLabel,
+        statusLabel: (_b2 = config.statusSequence[0]) != null ? _b2 : fallbackStatusLabel,
         statusContext: "Preparing Cursor CLI request\u2026",
         summary: void 0,
         statusPhase: 0
@@ -1380,41 +1542,112 @@ function FlowOverlayProvider(props = {}) {
       void sendToBackend(payload);
     }
   }, [config.models, config.statusSequence, fallbackStatusLabel, sendToBackend]);
-  const stop = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-  }, []);
   const onModelChange = useCallback(
     (value) => {
       setChat((current) => {
-        var _a2, _b;
+        var _a2, _b2;
         if (!current || current.status === "submitting") {
           return current;
         }
-        const nextValue = config.models.some((option) => option.value === value) ? value : (_b = (_a2 = config.models[0]) == null ? void 0 : _a2.value) != null ? _b : "";
+        const nextValue = config.models.some((option) => option.value === value) ? value : (_b2 = (_a2 = config.models[0]) == null ? void 0 : _a2.value) != null ? _b2 : "";
         return { ...current, model: nextValue };
       });
     },
     [config.models]
   );
-  if (!portalTarget || !chat) {
+  const onUndo = useCallback(async () => {
+    const sessionId = chat == null ? void 0 : chat.sessionId;
+    if (!sessionId) {
+      console.warn("[shipflow-overlay] No session ID available for undo");
+      return;
+    }
+    setChat((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        undoStatus: "pending",
+        undoMessage: "Reverting changes..."
+      };
+    });
+    try {
+      const undoEndpoint = config.endpoint.replace(/\/overlay\/?$/, "/undo");
+      const response = await fetch(undoEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ sessionId })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        setChat((current) => {
+          var _a2;
+          if (!current) return current;
+          return {
+            ...current,
+            undoStatus: "error",
+            undoMessage: (_a2 = data.error) != null ? _a2 : "Failed to undo changes."
+          };
+        });
+        return;
+      }
+      setChat((current) => {
+        var _a2, _b2, _c;
+        if (!current) return current;
+        return {
+          ...current,
+          undoStatus: "success",
+          undoMessage: (_c = data.message) != null ? _c : `Reverted ${(_b2 = (_a2 = data.restored) == null ? void 0 : _a2.length) != null ? _b2 : 0} file(s).`,
+          status: "idle",
+          statusAddonMode: "idle",
+          summary: void 0,
+          sessionId: void 0
+        };
+      });
+    } catch (error) {
+      console.error("[shipflow-overlay] Undo failed:", error);
+      setChat((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          undoStatus: "error",
+          undoMessage: error instanceof Error ? error.message : "Undo request failed."
+        };
+      });
+    }
+  }, [chat == null ? void 0 : chat.sessionId, config.endpoint]);
+  if (!portalTarget) {
+    return null;
+  }
+  const showBubble = chat && bubbleOpen;
+  const showMiniStatus = chat && chat.status === "submitting" && !bubbleOpen;
+  if (!showBubble && !showMiniStatus) {
     return null;
   }
   return createPortal(
-    /* @__PURE__ */ jsx(
-      Bubble,
-      {
-        chat,
-        onInstructionChange,
-        onSubmit,
-        onStop: stop,
-        onModelChange,
-        onClose: close,
-        modelOptions: config.models,
-        statusSequence: config.statusSequence
-      }
-    ),
+    /* @__PURE__ */ jsxs(Fragment, { children: [
+      showBubble && /* @__PURE__ */ jsx(
+        Bubble,
+        {
+          chat,
+          onInstructionChange,
+          onSubmit,
+          onStop: stop,
+          onModelChange,
+          onClose: close,
+          onUndo,
+          modelOptions: config.models,
+          statusSequence: config.statusSequence
+        }
+      ),
+      showMiniStatus && /* @__PURE__ */ jsx(
+        MiniStatus,
+        {
+          label: (_b = chat.statusLabel) != null ? _b : "Working...",
+          onClick: () => setBubbleOpen(true)
+        }
+      )
+    ] }),
     portalTarget
   );
 }
@@ -1423,7 +1656,7 @@ export {
   DEFAULT_STATUS_SEQUENCE,
   FlowOverlayProvider,
   Typewriter,
-  loadReactGrabRuntime,
-  registerClipboardInterceptor
+  disposeReactGrab,
+  initReactGrab
 };
 //# sourceMappingURL=index.js.map

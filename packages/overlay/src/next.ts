@@ -1,4 +1,5 @@
 import { createNextHandler, type ShipflowOverlayServerOptions } from "./server/createNextHandler";
+import { createUndoHandler, type ShipflowUndoServerOptions } from "./server/createUndoHandler";
 
 type NextConfig = Record<string, unknown>;
 
@@ -43,6 +44,7 @@ export function withShipflowOverlay<T extends NextConfig = NextConfig>(
 }
 
 export { createNextHandler, type ShipflowOverlayServerOptions };
+export { createUndoHandler, type ShipflowUndoServerOptions };
 
 
 

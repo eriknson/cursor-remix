@@ -1,0 +1,58 @@
+---
+description: Format for Cursor command files and shareable links
+globs: .cursor/commands/*.md
+---
+
+# Cursor Command File Format
+
+When creating or editing files in `.cursor/commands/`, follow this format:
+
+## File Structure
+
+```markdown
+# Command Title
+
+Brief 1-2 sentence description of what this command does.
+
+Steps:
+- Step 1: Concise action
+- Step 2: Concise action
+- ...
+
+[Optional] Match code style. Remind user to restart dev server.
+
+Checklist: Item1, Item2, Item3
+```
+
+## Writing Guidelines
+
+- Keep it short & sweet - agents work best with concise instructions
+- Use imperative mood ("Create", "Verify", "Add")
+- No code blocks - inline code with semicolons instead (e.g., `import { x } from "y"; export const z = x();`)
+- Each step should be a single actionable item
+- Include verification steps where needed
+- End with a checklist summary
+
+## Shareable Link Format
+
+Generate links using: `https://cursor.com/link/command?name={name}&text={encoded_text}`
+
+URL encoding rules:
+- Spaces → `+`
+- Newlines → `%0A`
+- `#` → `%23`
+- `@` → `%40`
+- `/` → `%2F`
+- `:` → `%3A`
+- `;` → `%3B`
+- `=` → `%3D`
+- `{` → `%7B`
+- `}` → `%7D`
+- `"` → `%22`
+- `,` → `%2C`
+- Keep `(`, `)`, `-` as-is
+
+Example link structure:
+```
+https://cursor.com/link/command?name=example&text=%23+Title%0A%0ADescription.%0A%0ASteps%3A%0A-+Step+one%0A-+Step+two
+```

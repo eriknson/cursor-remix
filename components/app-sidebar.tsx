@@ -3,20 +3,22 @@
 import * as React from "react"
 import {
   IconCamera,
-  IconChartBar,
+  IconClipboardList,
   IconDashboard,
   IconDatabase,
   IconFileAi,
   IconFileDescription,
   IconFileWord,
-  IconFolder,
   IconHelp,
+  IconChartBar,
   IconInnerShadowTop,
-  IconListDetails,
+  IconMessages,
   IconReport,
   IconSearch,
   IconSettings,
-  IconUsers,
+  IconChartLine,
+  IconCalendar,
+  IconChartDots,
 } from "@tabler/icons-react"
 
 import { NavDocuments } from '@/components/nav-documents'
@@ -32,6 +34,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar'
+import { Button } from '@/components/ui/button'
 
 const data = {
   user: {
@@ -41,29 +44,39 @@ const data = {
   },
   navMain: [
     {
+      title: "Overview",
+      url: "#",
+      icon: IconChartBar,
+    },
+    {
+      title: "Analytics",
+      url: "#",
+      icon: IconChartLine,
+    },
+    {
+      title: "Metrics",
+      url: "#",
+      icon: IconChartDots,
+    },
+    {
+      title: "Calendar",
+      url: "#",
+      icon: IconCalendar,
+    },
+    {
       title: "Dashboard",
       url: "#",
       icon: IconDashboard,
     },
     {
-      title: "Lifecycle",
+      title: "Tasks",
       url: "#",
-      icon: IconListDetails,
+      icon: IconClipboardList,
     },
     {
-      title: "Analytics",
+      title: "Messages",
       url: "#",
-      icon: IconChartBar,
-    },
-    {
-      title: "Projects",
-      url: "#",
-      icon: IconFolder,
-    },
-    {
-      title: "Team",
-      url: "#",
-      icon: IconUsers,
+      icon: IconMessages,
     },
   ],
   navClouds: [
@@ -162,7 +175,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             >
               <a href="#">
                 <IconInnerShadowTop className="!size-5" />
-                <span className="text-base font-semibold">Acme Inc.</span>
+                <span className="text-base font-semibold">Acme, Inc</span>
               </a>
             </SidebarMenuButton>
           </SidebarMenuItem>

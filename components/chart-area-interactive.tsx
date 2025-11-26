@@ -34,7 +34,7 @@ export const description = "An interactive area chart"
 
 // Generate realistic visitor data with natural variation
 // Includes weekly patterns, random fluctuations, and overall growth trend
-const startDate = new Date("2024-04-01")
+const startDate = new Date("2023-10-01")
 const endDate = new Date("2024-09-30")
 const totalDays = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24))
 
@@ -84,36 +84,41 @@ const chartConfig = {
   desktop: {
     label: "Desktop",
     theme: {
-      light: "hsl(280 90% 60%)",
-      dark: "hsl(280 90% 65%)",
+      light: "hsl(0 0% 20%)",
+      dark: "hsl(0 0% 80%)",
     },
   },
   mobile: {
     label: "Mobile",
     theme: {
-      light: "hsl(340 90% 60%)",
-      dark: "hsl(340 90% 65%)",
+      light: "hsl(0 0% 50%)",
+      dark: "hsl(0 0% 50%)",
     },
   },
 } satisfies ChartConfig
 
 export function ChartAreaInteractive() {
   const isMobile = useIsMobile()
-  const [timeRange, setTimeRange] = React.useState("180d")
+  const [timeRange, setTimeRange] = React.useState<string | undefined>(undefined)
 
   React.useEffect(() => {
     if (isMobile) {
       setTimeRange("7d")
+    } else {
+      setTimeRange("365d")
     }
   }, [isMobile])
+
+  // Use default value during SSR to prevent hydration mismatch
+  const currentTimeRange = timeRange ?? "365d"
 
   const filteredData = chartData.filter((item) => {
     const date = new Date(item.date)
     const referenceDate = new Date("2024-09-30")
-    let daysToSubtract = 180
-    if (timeRange === "30d") {
+    let daysToSubtract = 365
+    if (currentTimeRange === "30d") {
       daysToSubtract = 30
-    } else if (timeRange === "7d") {
+    } else if (currentTimeRange === "7d") {
       daysToSubtract = 7
     }
     const startDate = new Date(referenceDate)
@@ -122,38 +127,39 @@ export function ChartAreaInteractive() {
   })
 
   return (
-    <Card className="@container/card">
+    <>
+    <Card className="@container/card pb-6">
       <CardHeader>
         <CardTitle>Total Visitors</CardTitle>
         <CardDescription>
           <span className="hidden @[540px]/card:block">
-            the last 6 months
+            the last 12 months
           </span>
-          <span className="@[540px]/card:hidden">Last 6 months</span>
+          <span className="@[540px]/card:hidden">Last 12 months</span>
         </CardDescription>
         <CardAction>
           <ToggleGroup
             type="single"
-            value={timeRange}
+            value={currentTimeRange}
             onValueChange={setTimeRange}
             variant="outline"
             className="hidden *:data-[slot=toggle-group-item]:!px-4 @[767px]/card:flex"
           >
-            <ToggleGroupItem value="180d">Last 6 months</ToggleGroupItem>
+            <ToggleGroupItem value="365d">Last 12 months</ToggleGroupItem>
             <ToggleGroupItem value="30d">Last 30 days</ToggleGroupItem>
             <ToggleGroupItem value="7d">Last 7 days</ToggleGroupItem>
           </ToggleGroup>
-          <Select value={timeRange} onValueChange={setTimeRange}>
+          <Select value={currentTimeRange} onValueChange={setTimeRange}>
             <SelectTrigger
               className="flex w-40 **:data-[slot=select-value]:block **:data-[slot=select-value]:truncate @[767px]/card:hidden"
               size="sm"
               aria-label="Select a value"
             >
-              <SelectValue placeholder="Last 6 months" />
+              <SelectValue placeholder="Last 12 months" />
             </SelectTrigger>
             <SelectContent className="rounded-xl">
-              <SelectItem value="180d" className="rounded-lg">
-                Last 6 months
+              <SelectItem value="365d" className="rounded-lg">
+                Last 12 months
               </SelectItem>
               <SelectItem value="30d" className="rounded-lg">
                 Last 30 days
@@ -174,26 +180,26 @@ export function ChartAreaInteractive() {
             <defs>
               <linearGradient id="fillDesktop" x1="0" y1="0" x2="0" y2="1">
                 <stop
-                  offset="5%"
+                  offset="0%"
                   stopColor="var(--color-desktop)"
-                  stopOpacity={1.0}
+                  stopOpacity={0.4}
                 />
                 <stop
-                  offset="95%"
+                  offset="100%"
                   stopColor="var(--color-desktop)"
-                  stopOpacity={0.2}
+                  stopOpacity={0.05}
                 />
               </linearGradient>
               <linearGradient id="fillMobile" x1="0" y1="0" x2="0" y2="1">
                 <stop
-                  offset="5%"
+                  offset="0%"
                   stopColor="var(--color-mobile)"
-                  stopOpacity={1.0}
+                  stopOpacity={0.4}
                 />
                 <stop
-                  offset="95%"
+                  offset="100%"
                   stopColor="var(--color-mobile)"
-                  stopOpacity={0.2}
+                  stopOpacity={0.05}
                 />
               </linearGradient>
             </defs>
@@ -231,7 +237,7 @@ export function ChartAreaInteractive() {
               type="natural"
               fill="url(#fillMobile)"
               stroke="var(--color-mobile)"
-              strokeWidth={3}
+              strokeWidth={1.5}
               stackId="a"
             />
             <Area
@@ -239,12 +245,13 @@ export function ChartAreaInteractive() {
               type="natural"
               fill="url(#fillDesktop)"
               stroke="var(--color-desktop)"
-              strokeWidth={3}
+              strokeWidth={1.5}
               stackId="a"
             />
           </AreaChart>
         </ChartContainer>
       </CardContent>
     </Card>
+    </>
   )
 }

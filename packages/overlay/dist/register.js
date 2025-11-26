@@ -1,9 +1,9 @@
 import {
-  loadReactGrabRuntime,
-  registerClipboardInterceptor
-} from "./chunk-JXYVODP6.js";
+  disposeReactGrab,
+  initReactGrab
+} from "./chunk-57H4ZARC.js";
 export {
-  loadReactGrabRuntime,
-  registerClipboardInterceptor
+  disposeReactGrab,
+  initReactGrab
 };
 //# sourceMappingURL=register.js.map

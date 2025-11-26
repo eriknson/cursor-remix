@@ -1,7 +1,9 @@
 "use strict";
+var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __export = (target, all) => {
   for (var name in all)
@@ -15,6 +17,14 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // src/index.ts
@@ -24,8 +34,8 @@ __export(index_exports, {
   DEFAULT_STATUS_SEQUENCE: () => DEFAULT_STATUS_SEQUENCE,
   FlowOverlayProvider: () => FlowOverlayProvider,
   Typewriter: () => Typewriter,
-  loadReactGrabRuntime: () => loadReactGrabRuntime,
-  registerClipboardInterceptor: () => registerClipboardInterceptor
+  disposeReactGrab: () => disposeReactGrab,
+  initReactGrab: () => initReactGrab
 });
 module.exports = __toCommonJS(index_exports);
 
@@ -47,54 +57,14 @@ var DEFAULT_MODEL_OPTIONS = [
   { value: "gpt-5.1-codex-high", label: "GPT-5.1 Codex High" }
 ];
 
-// src/runtime/loadReactGrabRuntime.ts
-var DEFAULT_SCRIPT_URL = "https://unpkg.com/react-grab@0.0.51/dist/index.global.js";
-var GLOBAL_FLAG = "__shipflowReactGrabLoaded";
-var pendingLoad = null;
-function loadReactGrabRuntime(options = {}) {
-  var _a;
-  if (typeof window === "undefined") {
-    return Promise.resolve();
-  }
-  if (window[GLOBAL_FLAG]) {
-    return Promise.resolve();
-  }
-  if (pendingLoad) {
-    return pendingLoad;
-  }
-  const scriptUrl = (_a = options.url) != null ? _a : DEFAULT_SCRIPT_URL;
-  pendingLoad = new Promise((resolve, reject) => {
-    const existing = Array.from(document.scripts).find((script2) => script2.src === scriptUrl);
-    if (existing) {
-      window[GLOBAL_FLAG] = true;
-      pendingLoad = null;
-      resolve();
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = scriptUrl;
-    script.crossOrigin = "anonymous";
-    script.async = false;
-    script.onload = () => {
-      window[GLOBAL_FLAG] = true;
-      pendingLoad = null;
-      resolve();
-    };
-    script.onerror = (error) => {
-      pendingLoad = null;
-      reject(error instanceof ErrorEvent ? error.error : error);
-    };
-    document.head.appendChild(script);
-  });
-  return pendingLoad;
-}
-
-// src/runtime/registerClipboardInterceptor.ts
-var GLOBAL_KEY = "__shipflowOverlayCleanup";
+// src/runtime/initReactGrab.ts
+var INIT_FLAG = "__shipflowReactGrabInitialized";
 var HIGHLIGHT_ATTR = "data-react-grab-chat-highlighted";
 var STYLE_ID = "shipflow-overlay-highlight-style";
 var EVENT_OPEN = "react-grab-chat:open";
 var EVENT_CLOSE = "react-grab-chat:close";
+var apiInstance = null;
+var originalWriteText = null;
 var defaultOptions = {
   highlightColor: "#ff40e0",
   highlightStyleId: STYLE_ID
@@ -108,6 +78,54 @@ function ensureHighlightStyles(color, styleId) {
   outline: 2px solid ${color};
   outline-offset: 2px;
   transition: outline 0.2s ease;
+}
+
+/* Loading state: hide default outline, shimmer overlay will be added separately */
+[${HIGHLIGHT_ATTR}="true"][data-react-grab-loading="true"] {
+  outline: none;
+}
+
+/* Shimmer overlay element - positioned over the selected element */
+[data-sf-shimmer-overlay="true"] {
+  position: fixed;
+  pointer-events: none;
+  z-index: 2147483645;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+[data-sf-shimmer-overlay="true"]::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.04) 25%,
+    rgba(0, 0, 0, 0.08) 50%,
+    rgba(0, 0, 0, 0.04) 75%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: sf-shimmer 2s linear infinite;
+}
+
+[data-sf-shimmer-overlay="true"]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.02);
+  animation: sf-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes sf-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes sf-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
 }`;
   document.head.appendChild(style);
 }
@@ -126,13 +144,9 @@ function extractFilePath(stack) {
   var _a;
   if (typeof stack !== "string") return null;
   const patterns = [
-    // Format: "in Component (path/to/file.tsx:10:5)" or "at Component (path/to/file.tsx:10:5)"
     /\b(?:in|at)\s+\S+\s*\(([^()]+?\.(?:[jt]sx?|mdx?))(?::\d+)*\)/gi,
-    // Format: "in path/to/file.tsx" or "at path/to/file.tsx"
     /\b(?:in|at)\s+((?:[A-Za-z]:)?[^\s:()]+?\.(?:[jt]sx?|mdx?))/gi,
-    // Format: just "(path/to/file.tsx:10:5)" in parentheses
     /\(([^()]+?\.(?:[jt]sx?|mdx?))(?::\d+)*\)/gi,
-    // Format: bare path like "app/page.tsx" or "./app/page.tsx"
     /(?:^|\s)((?:\.\/)?(?:[A-Za-z]:)?[^\s:()]+?\.(?:[jt]sx?|mdx?))/gim
   ];
   for (const pattern of patterns) {
@@ -158,73 +172,6 @@ function toRelativePath(filePath, projectRoot) {
   }
   return filePath;
 }
-function findElementAtPoint(clientX, clientY) {
-  var _a;
-  const elements = document.elementsFromPoint(clientX, clientY);
-  for (const element of elements) {
-    if (!(element instanceof HTMLElement)) continue;
-    if ((_a = element.closest) == null ? void 0 : _a.call(element, "[data-react-grab]")) continue;
-    const style = window.getComputedStyle(element);
-    if (style.pointerEvents === "none" || style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) {
-      continue;
-    }
-    return element;
-  }
-  return null;
-}
-function findTooltipElement() {
-  var _a;
-  const OVERLAY_SELECTOR = '[data-react-grab="true"]';
-  const TOOLTIP_SELECTOR = "div.pointer-events-none.bg-grab-pink-light.text-grab-pink";
-  const visited = /* @__PURE__ */ new Set();
-  const visit = (node) => {
-    if (!node || visited.has(node)) {
-      return null;
-    }
-    visited.add(node);
-    if (node instanceof HTMLElement || node instanceof DocumentFragment) {
-      const queryMatch = node instanceof HTMLElement ? node.querySelector(TOOLTIP_SELECTOR) : null;
-      if (queryMatch) {
-        return queryMatch;
-      }
-      const children = node instanceof HTMLElement ? Array.from(node.children) : [];
-      for (const child of children) {
-        const found = visit(child);
-        if (found) {
-          return found;
-        }
-      }
-    }
-    if (node instanceof HTMLElement && node.shadowRoot) {
-      return visit(node.shadowRoot);
-    }
-    return null;
-  };
-  const hosts = document.querySelectorAll(OVERLAY_SELECTOR);
-  for (const host of hosts) {
-    const found = (_a = visit(host)) != null ? _a : host.shadowRoot ? visit(host.shadowRoot) : null;
-    if (found) {
-      return found;
-    }
-  }
-  return null;
-}
-function getHoverTagRect() {
-  const tooltip = findTooltipElement();
-  if (!(tooltip instanceof HTMLElement)) {
-    return null;
-  }
-  const rect = tooltip.getBoundingClientRect();
-  if (rect.width === 0 && rect.height === 0) {
-    return null;
-  }
-  return {
-    top: rect.top,
-    left: rect.left,
-    width: rect.width,
-    height: rect.height
-  };
-}
 function applyHighlight(element) {
   if (!element) return;
   const previous = document.querySelector(`[${HIGHLIGHT_ATTR}="true"]`);
@@ -237,112 +184,134 @@ function clearHighlight() {
   const highlighted = document.querySelector(`[${HIGHLIGHT_ATTR}="true"]`);
   highlighted == null ? void 0 : highlighted.removeAttribute(HIGHLIGHT_ATTR);
 }
-function dispatchOpenEvent(detail) {
-  window.dispatchEvent(
-    new CustomEvent(EVENT_OPEN, {
-      detail
-    })
-  );
-}
-function registerClipboardInterceptor(options = {}) {
-  var _a, _b;
-  if (typeof window === "undefined" || typeof navigator === "undefined") {
-    return () => void 0;
+function findTooltipElement() {
+  var _a;
+  const OVERLAY_SELECTOR = '[data-react-grab="true"]';
+  const TOOLTIP_SELECTOR = "div.pointer-events-none.bg-grab-pink-light.text-grab-pink";
+  const visited = /* @__PURE__ */ new Set();
+  const visit = (node) => {
+    if (!node || visited.has(node)) return null;
+    visited.add(node);
+    if (node instanceof HTMLElement || node instanceof DocumentFragment) {
+      const queryMatch = node instanceof HTMLElement ? node.querySelector(TOOLTIP_SELECTOR) : null;
+      if (queryMatch) return queryMatch;
+      const children = node instanceof HTMLElement ? Array.from(node.children) : [];
+      for (const child of children) {
+        const found = visit(child);
+        if (found) return found;
+      }
+    }
+    if (node instanceof HTMLElement && node.shadowRoot) {
+      return visit(node.shadowRoot);
+    }
+    return null;
+  };
+  const hosts = document.querySelectorAll(OVERLAY_SELECTOR);
+  for (const host of hosts) {
+    const found = (_a = visit(host)) != null ? _a : host.shadowRoot ? visit(host.shadowRoot) : null;
+    if (found) return found;
   }
-  if (window[GLOBAL_KEY]) {
-    return window[GLOBAL_KEY];
+  return null;
+}
+function getHoverTagRect() {
+  const tooltip = findTooltipElement();
+  if (!(tooltip instanceof HTMLElement)) return null;
+  const rect = tooltip.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return null;
+  return {
+    top: rect.top,
+    left: rect.left,
+    width: rect.width,
+    height: rect.height
+  };
+}
+function dispatchOpenEvent(detail) {
+  window.dispatchEvent(new CustomEvent(EVENT_OPEN, { detail }));
+}
+function handleSelection(elements, content, options) {
+  const parsed = parseClipboard(content);
+  const element = elements[0] instanceof HTMLElement ? elements[0] : null;
+  let boundingRect = null;
+  if (element) {
+    applyHighlight(element);
+    const rect = element.getBoundingClientRect();
+    boundingRect = {
+      top: rect.top,
+      left: rect.left,
+      width: rect.width,
+      height: rect.height
+    };
+  }
+  let filePath = parsed.codeLocation ? extractFilePath(parsed.codeLocation) : null;
+  filePath = filePath ? toRelativePath(filePath, options.projectRoot) : null;
+  const tagRect = getHoverTagRect();
+  dispatchOpenEvent({
+    htmlFrame: parsed.htmlFrame,
+    codeLocation: parsed.codeLocation,
+    filePath,
+    clipboardData: content,
+    pointer: null,
+    // Not needed with direct element reference
+    boundingRect,
+    tagRect
+  });
+}
+async function initReactGrab(options = {}) {
+  var _a, _b;
+  if (typeof window === "undefined") {
+    return null;
+  }
+  if (window[INIT_FLAG]) {
+    return apiInstance;
   }
   if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
     console.warn("[shipflow-overlay] navigator.clipboard.writeText is not available.");
-    return () => void 0;
+    return null;
   }
-  const projectRoot = options.projectRoot;
   const highlightColor = (_a = options.highlightColor) != null ? _a : defaultOptions.highlightColor;
   const highlightStyleId = (_b = options.highlightStyleId) != null ? _b : defaultOptions.highlightStyleId;
-  const logClipboardEndpoint = options.logClipboardEndpoint === void 0 ? null : options.logClipboardEndpoint;
   ensureHighlightStyles(highlightColor, highlightStyleId);
   clearHighlight();
-  void loadReactGrabRuntime({ url: options.reactGrabUrl });
-  let lastPointer = null;
-  const pointerListener = (event) => {
-    const pointer = event;
-    lastPointer = { clientX: pointer.clientX, clientY: pointer.clientY };
-  };
-  window.addEventListener("pointerup", pointerListener, true);
   window.addEventListener(EVENT_CLOSE, clearHighlight);
-  const originalWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
-  const overrideWriteText = async function(text) {
-    const parsed = parseClipboard(text);
-    const isReactGrabPayload = Boolean(parsed.htmlFrame || parsed.codeLocation);
-    const result = await originalWriteText(text);
-    if (!isReactGrabPayload) {
-      return result;
-    }
-    const pointer = lastPointer;
-    lastPointer = null;
-    const pointerPayload = pointer ? { x: pointer.clientX, y: pointer.clientY } : null;
-    let boundingRect = null;
-    let element = null;
-    if (pointer) {
-      element = findElementAtPoint(pointer.clientX, pointer.clientY);
-    }
-    if (!element) {
-      const fallback = document.querySelector(`[${HIGHLIGHT_ATTR}="true"]`);
-      if (fallback) {
-        element = fallback;
-      }
-    }
-    if (element instanceof HTMLElement) {
-      applyHighlight(element);
-      const rect = element.getBoundingClientRect();
-      boundingRect = {
-        top: rect.top,
-        left: rect.left,
-        width: rect.width,
-        height: rect.height
-      };
-    }
-    let filePath = parsed.codeLocation ? extractFilePath(parsed.codeLocation) : null;
-    filePath = filePath ? toRelativePath(filePath, projectRoot) : null;
-    const tagRect = getHoverTagRect();
-    dispatchOpenEvent({
-      htmlFrame: parsed.htmlFrame,
-      codeLocation: parsed.codeLocation,
-      filePath,
-      clipboardData: text,
-      pointer: pointerPayload,
-      boundingRect,
-      tagRect
-    });
-    if (logClipboardEndpoint) {
-      try {
-        await fetch(logClipboardEndpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            clipboardData: text,
-            timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-            filePath
-          })
-        });
-      } catch (error) {
-        console.error("[shipflow-overlay] Failed to log clipboard payload", error);
-      }
-    }
-    return result;
+  originalWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
+  navigator.clipboard.writeText = async (_text) => {
+    return;
   };
-  navigator.clipboard.writeText = overrideWriteText;
-  const cleanup = () => {
-    window.removeEventListener("pointerup", pointerListener, true);
-    window.removeEventListener(EVENT_CLOSE, clearHighlight);
-    if (navigator.clipboard.writeText === overrideWriteText) {
+  try {
+    const { init } = await import("react-grab/core");
+    apiInstance = init({
+      theme: { enabled: true },
+      onCopySuccess: (elements, content) => {
+        handleSelection(elements, content, options);
+      }
+    });
+    window[INIT_FLAG] = true;
+    return apiInstance;
+  } catch (error) {
+    console.error("[shipflow-overlay] Failed to initialize React Grab:", error);
+    if (originalWriteText) {
       navigator.clipboard.writeText = originalWriteText;
     }
+    return null;
+  }
+}
+function disposeReactGrab() {
+  if (apiInstance) {
+    try {
+      apiInstance.dispose();
+    } catch {
+    }
+    apiInstance = null;
+  }
+  if (originalWriteText && typeof navigator !== "undefined" && navigator.clipboard) {
+    navigator.clipboard.writeText = originalWriteText;
+    originalWriteText = null;
+  }
+  if (typeof window !== "undefined") {
+    window.removeEventListener(EVENT_CLOSE, clearHighlight);
     clearHighlight();
-    delete window[GLOBAL_KEY];
-  };
-  window[GLOBAL_KEY] = cleanup;
-  return cleanup;
+    delete window[INIT_FLAG];
+  }
 }
 
 // src/runtime/FlowOverlay.tsx
@@ -760,6 +729,31 @@ var ensureOverlayStyles = (root) => {
   0%, 100% { opacity: 0.6; }
   50% { opacity: 0.25; }
 }
+
+[data-sf-mini-status="true"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--sf-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--sf-border);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--sf-muted-text);
+  cursor: pointer;
+  z-index: 2147483646;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  animation: shipflow-fade-in 120ms ease-out;
+  pointer-events: auto;
+}
+
+[data-sf-mini-status="true"]:hover {
+  background: var(--sf-bg);
+  border-color: var(--sf-border);
+}
 `;
   const target = root instanceof Document ? (_c = (_b = (_a = root.head) != null ? _a : root.body) != null ? _b : root.documentElement) != null ? _c : root : root;
   target.appendChild(style);
@@ -843,6 +837,56 @@ function CursorIcon({ loading }) {
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { fill: "#43413c", d: "M464.52,133.2c-1.42-2.46-3.48-4.56-6.03-6.03L242.43,2.43c-2.8-1.62-5.93-2.43-9.06-2.43v266.66l231.16,133.46c1.42-2.46,2.21-5.3,2.21-8.24v-250.44c0-2.95-.78-5.77-2.21-8.24h-.01Z" }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { fill: "#d6d5d2", d: "M448.35,142.54c1.31,2.26,1.49,5.16,0,7.74l-209.83,363.42c-1.41,2.46-5.16,1.45-5.16-1.38v-239.48c0-1.91-.51-3.75-1.44-5.36l216.42-124.95h.01Z" }),
         /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { fill: "#fff", d: "M448.35,142.54l-216.42,124.95c-.92-1.6-2.26-2.96-3.92-3.92L20.62,143.83c-2.46-1.41-1.45-5.16,1.38-5.16h419.65c2.98,0,5.4,1.61,6.7,3.87Z" })
+      ]
+    }
+  );
+}
+function MiniStatus({
+  label,
+  onClick
+}) {
+  const [position, setPosition] = (0, import_react.useState)(null);
+  (0, import_react.useEffect)(() => {
+    const updatePosition = () => {
+      const highlighted = document.querySelector(HIGHLIGHT_QUERY);
+      if (!highlighted) return;
+      const rect = highlighted.getBoundingClientRect();
+      setPosition({
+        top: rect.top - 8,
+        left: rect.left + rect.width / 2
+      });
+    };
+    updatePosition();
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, []);
+  if (!position) return null;
+  const style = {
+    position: "fixed",
+    top: position.top,
+    left: position.left,
+    transform: "translate(-50%, -100%)"
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+    "div",
+    {
+      style,
+      "data-sf-mini-status": "true",
+      onClick,
+      role: "button",
+      tabIndex: 0,
+      onKeyDown: (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          onClick();
+        }
+      },
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CursorIcon, { loading: true }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { "data-sf-shimmer": "true", children: label })
       ]
     }
   );
@@ -979,6 +1023,7 @@ function Bubble({
   onStop,
   onModelChange,
   onClose,
+  onUndo,
   modelOptions,
   statusSequence
 }) {
@@ -1069,13 +1114,25 @@ function Bubble({
     };
     const pointer = chat.pointer;
     let bestStyle = null;
-    if (anchor) {
-      const anchorViewport = {
+    const highlightedElement = document.querySelector(HIGHLIGHT_QUERY);
+    let anchorViewport = null;
+    if (highlightedElement) {
+      const rect = highlightedElement.getBoundingClientRect();
+      anchorViewport = {
+        top: rect.top,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height
+      };
+    } else if (anchor) {
+      anchorViewport = {
         top: anchor.top - scrollY,
         left: anchor.left - scrollX,
         width: anchor.width,
         height: anchor.height
       };
+    }
+    if (anchorViewport) {
       const anchorCenterX = anchorViewport.left + anchorViewport.width / 2;
       const anchorCenterY = anchorViewport.top + anchorViewport.height / 2;
       const candidates = [];
@@ -1175,16 +1232,18 @@ function Bubble({
     if (chat.statusAddonMode !== "summary") {
       return;
     }
+    onUndo();
     window.dispatchEvent(
       new CustomEvent(EVENT_UNDO, {
         detail: {
           instruction: chat.instruction,
           summary: (_a2 = chat.summary) != null ? _a2 : null,
-          filePath: chat.filePath
+          filePath: chat.filePath,
+          sessionId: chat.sessionId
         }
       })
     );
-  }, [chat]);
+  }, [chat, onUndo]);
   (0, import_react.useEffect)(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -1330,7 +1389,7 @@ function Bubble({
   );
 }
 function FlowOverlayProvider(props = {}) {
-  var _a;
+  var _a, _b;
   const [portalTarget, setPortalTarget] = (0, import_react.useState)(null);
   const overlayContainerRef = (0, import_react.useRef)(null);
   (0, import_react.useEffect)(() => {
@@ -1389,44 +1448,43 @@ function FlowOverlayProvider(props = {}) {
     };
   }, [props.endpoint, props.models, props.statusSequence]);
   const [chat, setChat] = (0, import_react.useState)(null);
+  const [bubbleOpen, setBubbleOpen] = (0, import_react.useState)(false);
   const abortControllerRef = (0, import_react.useRef)(null);
   const fallbackStatusLabel = (_a = config.statusSequence[0]) != null ? _a : null;
   (0, import_react.useEffect)(() => {
     if (props.enableClipboardInterceptor === false) {
       return;
     }
-    let cleanup;
-    loadReactGrabRuntime({
-      url: clipboardOptions.reactGrabUrl
-    }).then(() => {
-      var _a2, _b;
-      cleanup = registerClipboardInterceptor({
-        projectRoot: clipboardOptions.projectRoot,
-        highlightColor: clipboardOptions.highlightColor,
-        highlightStyleId: clipboardOptions.highlightStyleId,
-        logClipboardEndpoint: (_b = (_a2 = clipboardOptions.logClipboardEndpoint) != null ? _a2 : process.env.SHIPFLOW_OVERLAY_LOG_ENDPOINT) != null ? _b : null,
-        reactGrabUrl: clipboardOptions.reactGrabUrl
-      });
+    let mounted = true;
+    initReactGrab({
+      projectRoot: clipboardOptions.projectRoot,
+      highlightColor: clipboardOptions.highlightColor,
+      highlightStyleId: clipboardOptions.highlightStyleId
     }).catch((error) => {
-      console.error("[shipflow-overlay] Failed to load React Grab runtime", error);
+      if (mounted) {
+        console.error("[shipflow-overlay] Failed to initialize React Grab:", error);
+      }
     });
     return () => {
-      cleanup == null ? void 0 : cleanup();
+      mounted = false;
+      disposeReactGrab();
     };
   }, [
     clipboardOptions.highlightColor,
     clipboardOptions.highlightStyleId,
-    clipboardOptions.logClipboardEndpoint,
     clipboardOptions.projectRoot,
-    clipboardOptions.reactGrabUrl,
     props.enableClipboardInterceptor
   ]);
   const close = (0, import_react.useCallback)(() => {
+    setBubbleOpen(false);
+  }, []);
+  const reset = (0, import_react.useCallback)(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
     setChat(null);
+    setBubbleOpen(false);
     window.dispatchEvent(new Event(EVENT_CLOSE2));
   }, []);
   const buildInitialState = (0, import_react.useCallback)(
@@ -1440,18 +1498,80 @@ function FlowOverlayProvider(props = {}) {
           ...buildInitialState(),
           ...payload
         });
+        setBubbleOpen(true);
       },
       [buildInitialState]
     ),
-    close,
+    reset,
+    // Use reset (not close) when a new selection is made to abort any previous request
     Boolean(chat)
   );
   useRecalculateRect(chat, setChat);
-  useEscapeToClose(Boolean(chat), close);
-  useAutoFocus(Boolean(chat), portalTarget);
+  useEscapeToClose(bubbleOpen, close);
+  useAutoFocus(bubbleOpen, portalTarget);
+  (0, import_react.useEffect)(() => {
+    const isLoading = (chat == null ? void 0 : chat.status) === "submitting";
+    const highlighted = document.querySelector(HIGHLIGHT_QUERY);
+    const SHIMMER_ID = "sf-shimmer-overlay";
+    const existingOverlay = document.getElementById(SHIMMER_ID);
+    if (existingOverlay) {
+      existingOverlay.remove();
+    }
+    if (highlighted) {
+      if (isLoading) {
+        highlighted.setAttribute("data-react-grab-loading", "true");
+        const overlay = document.createElement("div");
+        overlay.id = SHIMMER_ID;
+        overlay.setAttribute("data-sf-shimmer-overlay", "true");
+        document.body.appendChild(overlay);
+        const updatePosition = () => {
+          const rect = highlighted.getBoundingClientRect();
+          overlay.style.top = `${rect.top}px`;
+          overlay.style.left = `${rect.left}px`;
+          overlay.style.width = `${rect.width}px`;
+          overlay.style.height = `${rect.height}px`;
+        };
+        updatePosition();
+        const scrollHandler = () => updatePosition();
+        const resizeHandler = () => updatePosition();
+        window.addEventListener("scroll", scrollHandler, true);
+        window.addEventListener("resize", resizeHandler);
+        return () => {
+          window.removeEventListener("scroll", scrollHandler, true);
+          window.removeEventListener("resize", resizeHandler);
+          overlay.remove();
+          highlighted.removeAttribute("data-react-grab-loading");
+        };
+      } else {
+        highlighted.removeAttribute("data-react-grab-loading");
+      }
+    }
+    return () => {
+      const el = document.querySelector(HIGHLIGHT_QUERY);
+      el == null ? void 0 : el.removeAttribute("data-react-grab-loading");
+      const overlay = document.getElementById(SHIMMER_ID);
+      overlay == null ? void 0 : overlay.remove();
+    };
+  }, [chat == null ? void 0 : chat.status]);
+  (0, import_react.useEffect)(() => {
+    if (!chat || bubbleOpen) return;
+    const highlighted = document.querySelector(HIGHLIGHT_QUERY);
+    if (!highlighted) return;
+    const handleClick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setBubbleOpen(true);
+    };
+    highlighted.addEventListener("click", handleClick, true);
+    highlighted.style.cursor = "pointer";
+    return () => {
+      highlighted.removeEventListener("click", handleClick, true);
+      highlighted.style.cursor = "";
+    };
+  }, [chat, bubbleOpen]);
   const sendToBackend = (0, import_react.useCallback)(
     async (payload) => {
-      var _a2, _b;
+      var _a2, _b2;
       const controller = new AbortController();
       abortControllerRef.current = controller;
       const promotePhase = (phase) => {
@@ -1482,7 +1602,7 @@ function FlowOverlayProvider(props = {}) {
           const data = await response.json().catch(() => null);
           throw new Error((_a2 = data == null ? void 0 : data.error) != null ? _a2 : `Request failed with status ${response.status}`);
         }
-        const reader = (_b = response.body) == null ? void 0 : _b.getReader();
+        const reader = (_b2 = response.body) == null ? void 0 : _b2.getReader();
         if (!reader) {
           throw new Error("Streaming response is not supported in this environment.");
         }
@@ -1492,7 +1612,18 @@ function FlowOverlayProvider(props = {}) {
         let hasPromotedPlanning = false;
         let hasPromotedUpdating = false;
         const processEvent = (event) => {
-          var _a3, _b2, _c;
+          var _a3, _b3, _c;
+          if (event.event === "session") {
+            setChat(
+              (prev) => prev ? {
+                ...prev,
+                sessionId: event.sessionId,
+                undoStatus: "idle",
+                undoMessage: void 0
+              } : prev
+            );
+            return;
+          }
           if (event.event === "status") {
             const message = (_a3 = event.message) == null ? void 0 : _a3.trim();
             if (message) {
@@ -1518,7 +1649,7 @@ function FlowOverlayProvider(props = {}) {
             return;
           }
           if (event.event === "assistant") {
-            const chunk = (_b2 = event.text) == null ? void 0 : _b2.trim();
+            const chunk = (_b3 = event.text) == null ? void 0 : _b3.trim();
             if (chunk) {
               assistantSummary += chunk.endsWith("\n") ? chunk : `${chunk} `;
               if (!hasPromotedPlanning) {
@@ -1667,7 +1798,7 @@ function FlowOverlayProvider(props = {}) {
   const onSubmit = (0, import_react.useCallback)(() => {
     let payload = null;
     setChat((current) => {
-      var _a2, _b;
+      var _a2, _b2;
       if (!current) return current;
       if (current.status === "submitting") return current;
       const trimmed = current.instruction.trim();
@@ -1698,7 +1829,7 @@ function FlowOverlayProvider(props = {}) {
         error: void 0,
         serverMessage: void 0,
         statusAddonMode: "progress",
-        statusLabel: (_b = config.statusSequence[0]) != null ? _b : fallbackStatusLabel,
+        statusLabel: (_b2 = config.statusSequence[0]) != null ? _b2 : fallbackStatusLabel,
         statusContext: "Preparing Cursor CLI request\u2026",
         summary: void 0,
         statusPhase: 0
@@ -1708,41 +1839,112 @@ function FlowOverlayProvider(props = {}) {
       void sendToBackend(payload);
     }
   }, [config.models, config.statusSequence, fallbackStatusLabel, sendToBackend]);
-  const stop = (0, import_react.useCallback)(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-  }, []);
   const onModelChange = (0, import_react.useCallback)(
     (value) => {
       setChat((current) => {
-        var _a2, _b;
+        var _a2, _b2;
         if (!current || current.status === "submitting") {
           return current;
         }
-        const nextValue = config.models.some((option) => option.value === value) ? value : (_b = (_a2 = config.models[0]) == null ? void 0 : _a2.value) != null ? _b : "";
+        const nextValue = config.models.some((option) => option.value === value) ? value : (_b2 = (_a2 = config.models[0]) == null ? void 0 : _a2.value) != null ? _b2 : "";
         return { ...current, model: nextValue };
       });
     },
     [config.models]
   );
-  if (!portalTarget || !chat) {
+  const onUndo = (0, import_react.useCallback)(async () => {
+    const sessionId = chat == null ? void 0 : chat.sessionId;
+    if (!sessionId) {
+      console.warn("[shipflow-overlay] No session ID available for undo");
+      return;
+    }
+    setChat((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        undoStatus: "pending",
+        undoMessage: "Reverting changes..."
+      };
+    });
+    try {
+      const undoEndpoint = config.endpoint.replace(/\/overlay\/?$/, "/undo");
+      const response = await fetch(undoEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ sessionId })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        setChat((current) => {
+          var _a2;
+          if (!current) return current;
+          return {
+            ...current,
+            undoStatus: "error",
+            undoMessage: (_a2 = data.error) != null ? _a2 : "Failed to undo changes."
+          };
+        });
+        return;
+      }
+      setChat((current) => {
+        var _a2, _b2, _c;
+        if (!current) return current;
+        return {
+          ...current,
+          undoStatus: "success",
+          undoMessage: (_c = data.message) != null ? _c : `Reverted ${(_b2 = (_a2 = data.restored) == null ? void 0 : _a2.length) != null ? _b2 : 0} file(s).`,
+          status: "idle",
+          statusAddonMode: "idle",
+          summary: void 0,
+          sessionId: void 0
+        };
+      });
+    } catch (error) {
+      console.error("[shipflow-overlay] Undo failed:", error);
+      setChat((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          undoStatus: "error",
+          undoMessage: error instanceof Error ? error.message : "Undo request failed."
+        };
+      });
+    }
+  }, [chat == null ? void 0 : chat.sessionId, config.endpoint]);
+  if (!portalTarget) {
+    return null;
+  }
+  const showBubble = chat && bubbleOpen;
+  const showMiniStatus = chat && chat.status === "submitting" && !bubbleOpen;
+  if (!showBubble && !showMiniStatus) {
     return null;
   }
   return (0, import_react_dom.createPortal)(
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-      Bubble,
-      {
-        chat,
-        onInstructionChange,
-        onSubmit,
-        onStop: stop,
-        onModelChange,
-        onClose: close,
-        modelOptions: config.models,
-        statusSequence: config.statusSequence
-      }
-    ),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+      showBubble && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        Bubble,
+        {
+          chat,
+          onInstructionChange,
+          onSubmit,
+          onStop: stop,
+          onModelChange,
+          onClose: close,
+          onUndo,
+          modelOptions: config.models,
+          statusSequence: config.statusSequence
+        }
+      ),
+      showMiniStatus && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+        MiniStatus,
+        {
+          label: (_b = chat.statusLabel) != null ? _b : "Working...",
+          onClick: () => setBubbleOpen(true)
+        }
+      )
+    ] }),
     portalTarget
   );
 }
@@ -1752,7 +1954,7 @@ function FlowOverlayProvider(props = {}) {
   DEFAULT_STATUS_SEQUENCE,
   FlowOverlayProvider,
   Typewriter,
-  loadReactGrabRuntime,
-  registerClipboardInterceptor
+  disposeReactGrab,
+  initReactGrab
 });
 //# sourceMappingURL=index.cjs.map

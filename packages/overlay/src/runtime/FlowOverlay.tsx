@@ -14,22 +14,33 @@ import {
 import { createPortal } from "react-dom";
 import { ArrowUp, Square, Command } from "lucide-react";
 
+// WeakRef type declaration for older TypeScript configs
+declare const WeakRef: {
+  prototype: WeakRef<object>;
+  new <T extends object>(target: T): WeakRef<T>;
+};
+interface WeakRef<T extends object> {
+  readonly [Symbol.toStringTag]: "WeakRef";
+  deref(): T | undefined;
+}
+
 import { DEFAULT_MODEL_OPTIONS, DEFAULT_STATUS_SEQUENCE } from "./constants";
 import type {
   ModelOption,
+  Rect,
   SelectionPayload,
   ShipflowOverlayConfig,
   StatusAddonMode,
   StatusSequence,
   StreamEvent,
 } from "./types";
-import { loadReactGrabRuntime } from "./loadReactGrabRuntime";
-import {
-  registerClipboardInterceptor,
-  type ClipboardInterceptorOptions,
-} from "./registerClipboardInterceptor";
+import { initReactGrab, disposeReactGrab, SELECTION_ID_ATTR, type InitReactGrabOptions } from "./initReactGrab";
 
-const HIGHLIGHT_QUERY = "[data-react-grab-chat-highlighted='true']";
+const HIGHLIGHT_ATTR = "data-react-grab-chat-highlighted";
+const HIGHLIGHT_QUERY = `[${HIGHLIGHT_ATTR}='true']`;
+const CHAT_ID_ATTR = "data-sf-chat-id";
+const LOADING_ATTR = "data-react-grab-loading";
+const SHIMMER_ATTR = "data-sf-shimmer-overlay";
 const OVERLAY_STYLE_ID = "shipflow-overlay-styles";
 const OVERLAY_ROOT_ID = "shipflow-overlay-root";
 
@@ -448,6 +459,31 @@ const ensureOverlayStyles = (root: Document | ShadowRoot) => {
   0%, 100% { opacity: 0.6; }
   50% { opacity: 0.25; }
 }
+
+[data-sf-mini-status="true"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--sf-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--sf-border);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--sf-muted-text);
+  cursor: pointer;
+  z-index: 2147483646;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  animation: shipflow-fade-in 120ms ease-out;
+  pointer-events: auto;
+}
+
+[data-sf-mini-status="true"]:hover {
+  background: var(--sf-bg);
+  border-color: var(--sf-border);
+}
 `;
 
   const target: ParentNode =
@@ -495,6 +531,8 @@ const DEFAULT_CONFIG: ShipflowOverlayConfig = {
 };
 
 type ChatState = SelectionPayload & {
+  id: string;
+  selectionId: string | null;
   instruction: string;
   status: "idle" | "submitting" | "success" | "error";
   error?: string;
@@ -506,6 +544,11 @@ type ChatState = SelectionPayload & {
   statusContext: string | null;
   useTypewriter: boolean;
   summary?: string;
+  sessionId?: string;
+  undoStatus?: "idle" | "pending" | "success" | "error";
+  undoMessage?: string;
+  elementRef?: WeakRef<HTMLElement>;
+  elementNode?: HTMLElement | null;
 };
 
 const DEFAULT_BUBBLE_STYLE: CSSProperties = {
@@ -519,10 +562,16 @@ const ANCHOR_GAP = 24;
 const POINTER_HORIZONTAL_GAP = 16;
 const POINTER_VERTICAL_OFFSET = 12;
 
+let chatIdCounter = 0;
+const generateChatId = () => `chat-${++chatIdCounter}-${Date.now()}`;
+
 const createInitialState = (
   models: readonly ModelOption[],
   statusSequence: StatusSequence,
+  id?: string,
 ): ChatState => ({
+  id: id ?? generateChatId(),
+  selectionId: null,
   htmlFrame: null,
   codeLocation: null,
   filePath: null,
@@ -540,11 +589,13 @@ const createInitialState = (
   statusContext: null,
   useTypewriter: true,
   summary: undefined,
+  elementRef: undefined,
+  elementNode: null,
 });
 
 export type FlowOverlayProps = Partial<ShipflowOverlayConfig> & {
   enableClipboardInterceptor?: boolean;
-  clipboardOptions?: ClipboardInterceptorOptions;
+  clipboardOptions?: InitReactGrabOptions;
 };
 
 function CursorIcon({ loading }: { loading?: boolean }) {
@@ -565,64 +616,170 @@ function CursorIcon({ loading }: { loading?: boolean }) {
   );
 }
 
+function MiniStatus({
+  chat,
+  label,
+  onClick,
+  resolveElement,
+}: {
+  chat: ChatState;
+  label: string;
+  onClick: () => void;
+  resolveElement: (chat: ChatState) => HTMLElement | null;
+}) {
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  const chatIdRef = useRef(chat.id);
+  chatIdRef.current = chat.id;
+
+  // Compute position from element or fallback to stored rect
+  const computePosition = useCallback(() => {
+    const element = resolveElement(chat);
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[shipflow-overlay] MiniStatus computePosition:", {
+        chatId: chat.id,
+        elementFound: !!element,
+        elementConnected: element?.isConnected,
+        hasBoundingRect: !!chat.boundingRect,
+      });
+    }
+    if (element && element.isConnected) {
+      const rect = element.getBoundingClientRect();
+      return {
+        top: rect.top - 8,
+        left: rect.left + rect.width / 2,
+      };
+    }
+
+    if (chat.boundingRect) {
+      return {
+        top: chat.boundingRect.top - 8,
+        left: chat.boundingRect.left + chat.boundingRect.width / 2,
+      };
+    }
+
+    return null;
+  }, [chat, resolveElement]);
+
+  // Initialize and update position
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const updatePosition = () => {
+      const newPos = computePosition();
+      setPosition(newPos);
+    };
+
+    // Initial position
+    updatePosition();
+
+    // Update on scroll/resize
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [computePosition]);
+
+  if (!position) return null;
+
+  const style: CSSProperties = {
+    position: "fixed",
+    top: position.top,
+    left: position.left,
+    transform: "translate(-50%, -100%)",
+  };
+
+  return (
+    <div
+      style={style}
+      data-sf-mini-status="true"
+      data-sf-chat-id={chat.id}
+      onClick={onClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          onClick();
+        }
+      }}
+    >
+      <CursorIcon loading />
+      <span data-sf-shimmer="true">{label}</span>
+    </div>
+  );
+}
+
+type SelectionEventPayload = SelectionPayload & {
+  selectionId?: string | null;
+  targetElement?: HTMLElement | null;
+};
+
 function useSelectionEvents(
-  onOpen: (payload: SelectionPayload) => void,
-  onClose: () => void,
-  isOpen: boolean,
+  onOpen: (payload: SelectionEventPayload) => void,
 ) {
   useEffect(() => {
     const handler = (event: Event) => {
-      const custom = event as CustomEvent<SelectionPayload>;
+      const custom = event as CustomEvent<SelectionEventPayload>;
       if (!custom.detail) return;
-
-      if (isOpen) {
-        onClose();
-      }
-
       onOpen(custom.detail);
     };
 
     window.addEventListener(EVENT_OPEN, handler as EventListener);
     return () => window.removeEventListener(EVENT_OPEN, handler as EventListener);
-  }, [onOpen, onClose, isOpen]);
+  }, [onOpen]);
 }
 
 function useRecalculateRect(
-  chat: ChatState | null,
-  setChat: React.Dispatch<React.SetStateAction<ChatState | null>>,
+  chatId: string | null,
+  chats: Map<string, ChatState>,
+  resolveChatElement: (chat: ChatState) => HTMLElement | null,
+  updateChat: (id: string, updater: (chat: ChatState) => ChatState) => void,
 ) {
   useEffect(() => {
+    if (!chatId) return;
+    const chat = chats.get(chatId);
     if (!chat) return;
 
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    let frameId: number | null = null;
+    let retryCount = 0;
+    const MAX_RETRIES = 120;
+
     const updateRect = () => {
-      const element = document.querySelector(HIGHLIGHT_QUERY);
+      const element = resolveChatElement(chat);
 
       if (!(element instanceof HTMLElement)) {
-        setChat((current) => {
-          if (!current || current.boundingRect === null) {
-            return current;
+        if (retryCount < MAX_RETRIES) {
+          retryCount += 1;
+          if (frameId !== null) {
+            window.cancelAnimationFrame(frameId);
           }
-          return { ...current, boundingRect: null };
-        });
+          frameId = window.requestAnimationFrame(updateRect);
+        }
         return;
       }
 
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+        frameId = null;
+      }
+      retryCount = 0;
+
       const rect = element.getBoundingClientRect();
-      const scrollX = window.scrollX;
-      const scrollY = window.scrollY;
 
       const nextRect = {
-        top: rect.top + scrollY,
-        left: rect.left + scrollX,
+        top: rect.top,
+        left: rect.left,
         width: rect.width,
         height: rect.height,
       };
 
-      setChat((current) => {
-        if (!current) {
-          return current;
-        }
-
+      updateChat(chatId, (current) => {
         const prev = current.boundingRect;
         const hasChanged =
           !prev ||
@@ -647,10 +804,13 @@ function useRecalculateRect(
     window.addEventListener("resize", updateRect);
 
     return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
       window.removeEventListener("scroll", updateRect, true);
       window.removeEventListener("resize", updateRect);
     };
-  }, [chat, setChat]);
+  }, [chatId, chats, resolveChatElement, updateChat]);
 }
 
 function useEscapeToClose(isOpen: boolean, onClose: () => void) {
@@ -690,6 +850,7 @@ function useClickOutside(
   ref: React.RefObject<HTMLElement | null>,
   isOpen: boolean,
   onClose: () => void,
+  getHighlightElement?: () => HTMLElement | null,
 ) {
   useEffect(() => {
     if (!isOpen) return;
@@ -703,7 +864,9 @@ function useClickOutside(
         return;
       }
 
-      const highlightedElement = document.querySelector(HIGHLIGHT_QUERY);
+      const highlightedElement = getHighlightElement
+        ? getHighlightElement()
+        : document.querySelector<HTMLElement>(HIGHLIGHT_QUERY);
       const clickedInsideHighlight = highlightedElement && path.includes(highlightedElement);
       
       if (!clickedInsideHighlight) {
@@ -715,7 +878,7 @@ function useClickOutside(
     return () => {
       document.removeEventListener("mousedown", handleClickOutside, true);
     };
-  }, [ref, isOpen, onClose]);
+  }, [ref, isOpen, onClose, getHighlightElement]);
 }
 
 function Typewriter({ text }: { text: string }) {
@@ -745,6 +908,8 @@ function Bubble({
   onStop,
   onModelChange,
   onClose,
+  onUndo,
+  resolveElement,
   modelOptions,
   statusSequence,
 }: {
@@ -754,6 +919,8 @@ function Bubble({
   onStop: () => void;
   onModelChange: (value: string) => void;
   onClose: () => void;
+  onUndo: () => void;
+  resolveElement: (chat: ChatState) => HTMLElement | null;
   modelOptions: readonly ModelOption[];
   statusSequence: StatusSequence;
 }) {
@@ -762,6 +929,10 @@ function Bubble({
   const [bubbleSize, setBubbleSize] = useState<{ width: number; height: number } | null>(null);
   const [bubbleStyle, setBubbleStyle] = useState<CSSProperties>(DEFAULT_BUBBLE_STYLE);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const highlightResolver = useCallback(
+    () => resolveElement(chat),
+    [chat, resolveElement],
+  );
 
   // Get the currently selected model's label
   const selectedModelLabel = useMemo(() => {
@@ -776,7 +947,7 @@ function Bubble({
     return `calc(${charWidth}ch + 44px)`;
   }, [selectedModelLabel]);
 
-  useClickOutside(bubbleRef, true, onClose);
+  useClickOutside(bubbleRef, true, onClose, highlightResolver);
 
   useLayoutEffect(() => {
     const node = bubbleRef.current;
@@ -861,13 +1032,28 @@ function Bubble({
     const pointer = chat.pointer;
     let bestStyle: CSSProperties | null = null;
 
-    if (anchor) {
-      const anchorViewport = {
-        top: anchor.top - scrollY,
-        left: anchor.left - scrollX,
+    // Try to get fresh rect from highlighted element, fall back to anchor from state
+    const highlightedElement = highlightResolver();
+    let anchorViewport: { top: number; left: number; width: number; height: number } | null = null;
+
+    if (highlightedElement) {
+      const rect = highlightedElement.getBoundingClientRect();
+      anchorViewport = {
+        top: rect.top,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height,
+      };
+    } else if (anchor) {
+      anchorViewport = {
+        top: anchor.top,
+        left: anchor.left,
         width: anchor.width,
         height: anchor.height,
       };
+    }
+
+    if (anchorViewport) {
 
       const anchorCenterX = anchorViewport.left + anchorViewport.width / 2;
       const anchorCenterY = anchorViewport.top + anchorViewport.height / 2;
@@ -993,7 +1179,16 @@ function Bubble({
     }
 
     setBubbleStyle((prev) => (prev === DEFAULT_BUBBLE_STYLE ? prev : DEFAULT_BUBBLE_STYLE));
-  }, [anchor, bubbleSize, chat.pointer]);
+  }, [
+    anchor?.top,
+    anchor?.left,
+    anchor?.width,
+    anchor?.height,
+    bubbleSize,
+    chat.pointer,
+    chat.id,
+    highlightResolver,
+  ]);
 
   const isSubmitting = chat.status === "submitting";
   const hasInput = chat.instruction.trim().length > 0;
@@ -1007,16 +1202,21 @@ function Bubble({
       return;
     }
 
+    // Call the undo handler
+    onUndo();
+
+    // Also dispatch event for backward compatibility
     window.dispatchEvent(
       new CustomEvent(EVENT_UNDO, {
         detail: {
           instruction: chat.instruction,
           summary: chat.summary ?? null,
           filePath: chat.filePath,
+          sessionId: chat.sessionId,
         },
       }),
     );
-  }, [chat]);
+  }, [chat, onUndo]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -1254,95 +1454,417 @@ export function FlowOverlayProvider(props: FlowOverlayProps = {}) {
     };
   }, [props.endpoint, props.models, props.statusSequence]);
 
-  const [chat, setChat] = useState<ChatState | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
+  // Multi-chat state
+  const [chats, setChats] = useState<Map<string, ChatState>>(new Map());
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const fallbackStatusLabel = config.statusSequence[0] ?? null;
+
+  // Helper to update a specific chat
+  const updateChat = useCallback((id: string, updater: (chat: ChatState) => ChatState) => {
+    setChats((prev) => {
+      const chat = prev.get(id);
+      if (!chat) return prev;
+      const updated = updater(chat);
+      if (updated === chat) return prev;
+      const next = new Map(prev);
+      next.set(id, updated);
+      return next;
+    });
+  }, []);
+
+  // Cache for resolved elements - avoids state updates during render
+  const elementCacheRef = useRef<Map<string, HTMLElement>>(new Map());
+
+  // Helper to remove a chat and clean up
+  const removeChat = useCallback((id: string) => {
+    // Abort any running request
+    const controller = abortControllersRef.current.get(id);
+    if (controller) {
+      controller.abort();
+      abortControllersRef.current.delete(id);
+    }
+
+    // Clear from element cache
+    elementCacheRef.current.delete(id);
+
+    // Remove highlight from element
+    setChats((prev) => {
+      const chat = prev.get(id);
+      const element =
+        chat?.elementNode && chat.elementNode.isConnected
+          ? chat.elementNode
+          : chat?.elementRef?.deref();
+      if (element) {
+        element.removeAttribute(HIGHLIGHT_ATTR);
+        element.removeAttribute(SELECTION_ID_ATTR);
+        element.removeAttribute(CHAT_ID_ATTR);
+        element.removeAttribute(LOADING_ATTR);
+      }
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+
+    // Clear activeId if this was the active chat
+    setActiveId((current) => (current === id ? null : current));
+  }, []);
+
+  // Pure element resolver - NO state updates, just returns the element
+  const resolveChatElement = useCallback(
+    (chat: ChatState): HTMLElement | null => {
+      if (typeof document === "undefined") {
+        return null;
+      }
+
+      // Check cache first
+      const cached = elementCacheRef.current.get(chat.id);
+      if (cached && cached.isConnected) {
+        return cached;
+      }
+
+      let element: HTMLElement | null = null;
+
+      // Try stored node
+      if (chat.elementNode && chat.elementNode.isConnected) {
+        element = chat.elementNode;
+      }
+
+      // Try weak ref
+      if (!element && chat.elementRef) {
+        const deref = chat.elementRef.deref();
+        if (deref && deref.isConnected) {
+          element = deref;
+        }
+      }
+
+      // Try selection ID query
+      if (!element && chat.selectionId) {
+        element = document.querySelector<HTMLElement>(
+          `[${SELECTION_ID_ATTR}="${chat.selectionId}"]`,
+        );
+      }
+
+      // Try chat ID query
+      if (!element) {
+        element = document.querySelector<HTMLElement>(`[${CHAT_ID_ATTR}="${chat.id}"]`);
+      }
+
+      if (element && element.isConnected) {
+        // Update cache
+        elementCacheRef.current.set(chat.id, element);
+        
+        // Ensure attributes are set (no state update)
+        element.setAttribute(HIGHLIGHT_ATTR, "true");
+        if (chat.selectionId) {
+          element.setAttribute(SELECTION_ID_ATTR, chat.selectionId);
+        }
+        element.setAttribute(CHAT_ID_ATTR, chat.id);
+        
+        return element;
+      }
+
+      // Remove from cache if not found
+      elementCacheRef.current.delete(chat.id);
+      return null;
+    },
+    [],
+  );
 
   useEffect(() => {
     if (props.enableClipboardInterceptor === false) {
       return;
     }
 
-    let cleanup: (() => void) | undefined;
+    let mounted = true;
 
-    loadReactGrabRuntime({
-      url: clipboardOptions.reactGrabUrl,
-    })
-      .then(() => {
-        cleanup = registerClipboardInterceptor({
-          projectRoot: clipboardOptions.projectRoot,
-          highlightColor: clipboardOptions.highlightColor,
-          highlightStyleId: clipboardOptions.highlightStyleId,
-          logClipboardEndpoint:
-            clipboardOptions.logClipboardEndpoint ??
-            process.env.SHIPFLOW_OVERLAY_LOG_ENDPOINT ??
-            null,
-          reactGrabUrl: clipboardOptions.reactGrabUrl,
-        });
-      })
-      .catch((error) => {
-        console.error("[shipflow-overlay] Failed to load React Grab runtime", error);
-      });
+    initReactGrab({
+      projectRoot: clipboardOptions.projectRoot,
+      highlightColor: clipboardOptions.highlightColor,
+      highlightStyleId: clipboardOptions.highlightStyleId,
+    }).catch((error) => {
+      if (mounted) {
+        console.error("[shipflow-overlay] Failed to initialize React Grab:", error);
+      }
+    });
 
     return () => {
-      cleanup?.();
+      mounted = false;
+      disposeReactGrab();
     };
   }, [
     clipboardOptions.highlightColor,
     clipboardOptions.highlightStyleId,
-    clipboardOptions.logClipboardEndpoint,
     clipboardOptions.projectRoot,
-    clipboardOptions.reactGrabUrl,
     props.enableClipboardInterceptor,
   ]);
 
+  // Close just hides the bubble - request continues in background
   const close = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    setChat(null);
-    window.dispatchEvent(new Event(EVENT_CLOSE));
+    setActiveId(null);
   }, []);
 
+  // Build initial state for a new chat
   const buildInitialState = useCallback(
-    () => createInitialState(config.models, config.statusSequence),
+    (id?: string) => createInitialState(config.models, config.statusSequence, id),
     [config.models, config.statusSequence],
   );
 
+  // Handle new selections - add to chats map without aborting existing
   useSelectionEvents(
     useCallback(
-      (payload: SelectionPayload) => {
-        setChat({
-          ...buildInitialState(),
-          ...payload,
+      (payload: SelectionEventPayload) => {
+        const newId = generateChatId();
+
+        const {
+          selectionId: incomingSelectionId,
+          targetElement,
+          tagRect: _unusedTagRect,
+          ...payloadWithoutExtras
+        } = payload as SelectionEventPayload & { tagRect?: unknown };
+
+        let highlightedElement: HTMLElement | null =
+          targetElement && targetElement.isConnected ? targetElement : null;
+
+        if (!highlightedElement && incomingSelectionId) {
+          highlightedElement = document.querySelector<HTMLElement>(
+            `[${SELECTION_ID_ATTR}="${incomingSelectionId}"]`,
+          );
+        }
+
+        if (highlightedElement && !highlightedElement.isConnected) {
+          highlightedElement = null;
+        }
+
+        if (!highlightedElement && process.env.NODE_ENV !== "production") {
+          console.warn(
+            "[shipflow-overlay] Unable to resolve highlighted element for selection",
+            incomingSelectionId,
+          );
+        }
+
+        if (highlightedElement) {
+          highlightedElement.setAttribute(CHAT_ID_ATTR, newId);
+          highlightedElement.setAttribute(HIGHLIGHT_ATTR, "true");
+          if (incomingSelectionId) {
+            highlightedElement.setAttribute(SELECTION_ID_ATTR, incomingSelectionId);
+          }
+          // Cache element immediately
+          elementCacheRef.current.set(newId, highlightedElement);
+        }
+
+        const weakRef =
+          highlightedElement && typeof WeakRef === "function"
+            ? new WeakRef(highlightedElement)
+            : undefined;
+
+        const nextBoundingRect = (() => {
+          if (highlightedElement) {
+            const rect = highlightedElement.getBoundingClientRect();
+            return {
+              top: rect.top,
+              left: rect.left,
+              width: rect.width,
+              height: rect.height,
+            };
+          }
+          if (payloadWithoutExtras.boundingRect) {
+            return payloadWithoutExtras.boundingRect;
+          }
+          return null;
+        })();
+
+        const newChat: ChatState = {
+          ...buildInitialState(newId),
+          ...payloadWithoutExtras,
+          selectionId: incomingSelectionId ?? null,
+          elementRef: weakRef,
+          elementNode: highlightedElement ?? null,
+          boundingRect: nextBoundingRect,
+        };
+
+        setChats((prev) => {
+          const next = new Map(prev);
+          next.set(newId, newChat);
+          return next;
         });
+        setActiveId(newId);
       },
       [buildInitialState],
     ),
-    close,
-    Boolean(chat),
   );
 
-  useRecalculateRect(chat, setChat);
-  useEscapeToClose(Boolean(chat), close);
-  useAutoFocus(Boolean(chat), portalTarget);
+  // Get active chat
+  const activeChat = activeId ? chats.get(activeId) ?? null : null;
+
+  // Debug logging in development
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "production") {
+      const chatList = Array.from(chats.entries()).map(([id, c]) => ({
+        id,
+        status: c.status,
+        hasElement: !!c.elementNode,
+        hasWeakRef: !!c.elementRef,
+        hasBoundingRect: !!c.boundingRect,
+        cached: elementCacheRef.current.has(id),
+      }));
+      console.log("[shipflow-overlay] State update:", {
+        activeId,
+        chatCount: chats.size,
+        chats: chatList,
+      });
+    }
+  }, [activeId, chats]);
+
+  useRecalculateRect(activeId, chats, resolveChatElement, updateChat);
+  useEscapeToClose(activeId !== null, close);
+  useAutoFocus(activeId !== null, portalTarget);
+
+  // Track shimmer overlays and their listeners
+  const shimmerStateRef = useRef<Map<string, {
+    overlay: HTMLElement;
+    element: HTMLElement;
+    scrollHandler: () => void;
+    resizeHandler: () => void;
+  }>>(new Map());
+
+  // Toggle loading shimmer overlay on highlighted elements
+  useEffect(() => {
+    const currentShimmers = shimmerStateRef.current;
+    const activeChatIds = new Set<string>();
+
+    // Create or update shimmers for loading chats
+    chats.forEach((chat) => {
+      const element = resolveChatElement(chat);
+      if (!element || !element.isConnected) return;
+
+      const isLoading = chat.status === "submitting";
+      const shimmerId = `sf-shimmer-overlay-${chat.id}`;
+
+      if (isLoading) {
+        activeChatIds.add(chat.id);
+        element.setAttribute(LOADING_ATTR, "true");
+
+        // Check if shimmer already exists
+        let shimmerState = currentShimmers.get(chat.id);
+        
+        if (!shimmerState) {
+          // Create new shimmer overlay
+          const overlay = document.createElement("div");
+          overlay.id = shimmerId;
+          overlay.setAttribute(SHIMMER_ATTR, "true");
+          overlay.setAttribute(CHAT_ID_ATTR, chat.id);
+          document.body.appendChild(overlay);
+
+          const updatePosition = () => {
+            if (!element.isConnected) return;
+            const rect = element.getBoundingClientRect();
+            overlay.style.top = `${rect.top}px`;
+            overlay.style.left = `${rect.left}px`;
+            overlay.style.width = `${rect.width}px`;
+            overlay.style.height = `${rect.height}px`;
+          };
+
+          updatePosition();
+
+          const scrollHandler = () => updatePosition();
+          const resizeHandler = () => updatePosition();
+          window.addEventListener("scroll", scrollHandler, true);
+          window.addEventListener("resize", resizeHandler);
+
+          shimmerState = { overlay, element, scrollHandler, resizeHandler };
+          currentShimmers.set(chat.id, shimmerState);
+        } else {
+          // Update existing overlay position
+          const rect = element.getBoundingClientRect();
+          shimmerState.overlay.style.top = `${rect.top}px`;
+          shimmerState.overlay.style.left = `${rect.left}px`;
+          shimmerState.overlay.style.width = `${rect.width}px`;
+          shimmerState.overlay.style.height = `${rect.height}px`;
+        }
+      } else {
+        element.removeAttribute(LOADING_ATTR);
+      }
+    });
+
+    // Remove shimmers for chats that are no longer loading
+    currentShimmers.forEach((shimmerState, chatId) => {
+      if (!activeChatIds.has(chatId)) {
+        window.removeEventListener("scroll", shimmerState.scrollHandler, true);
+        window.removeEventListener("resize", shimmerState.resizeHandler);
+        shimmerState.overlay.remove();
+        shimmerState.element.removeAttribute(LOADING_ATTR);
+        currentShimmers.delete(chatId);
+      }
+    });
+
+    // Cleanup on unmount only
+    return () => {
+      // Only clean up everything on full unmount
+      // Check if we're actually unmounting vs just re-rendering
+    };
+  }, [chats, resolveChatElement]);
+
+  // Cleanup all shimmers on unmount
+  useEffect(() => {
+    return () => {
+      shimmerStateRef.current.forEach((shimmerState) => {
+        window.removeEventListener("scroll", shimmerState.scrollHandler, true);
+        window.removeEventListener("resize", shimmerState.resizeHandler);
+        shimmerState.overlay.remove();
+        shimmerState.element.removeAttribute(LOADING_ATTR);
+      });
+      shimmerStateRef.current.clear();
+    };
+  }, []);
+
+  // Click on highlighted element to focus its chat
+  useEffect(() => {
+    const handlers: Array<{ element: HTMLElement; handler: (e: MouseEvent) => void }> = [];
+
+    chats.forEach((chat) => {
+      const element = resolveChatElement(chat);
+      if (!element) return;
+
+      // Only add click handler when this chat is not active
+      if (chat.id === activeId) return;
+
+      const handleClick = (e: MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setActiveId(chat.id);
+      };
+
+      element.addEventListener("click", handleClick, true);
+      element.style.cursor = "pointer";
+      handlers.push({ element, handler: handleClick });
+    });
+
+    return () => {
+      handlers.forEach(({ element, handler }) => {
+        element.removeEventListener("click", handler, true);
+        element.style.cursor = "";
+      });
+    };
+  }, [chats, activeId, resolveChatElement]);
 
   const sendToBackend = useCallback(
-    async (payload: {
-      filePath: string | null;
-      htmlFrame: string | null;
-      stackTrace: string | null;
-      instruction: string;
-      model: string;
-    }) => {
+    async (
+      chatId: string,
+      payload: {
+        filePath: string | null;
+        htmlFrame: string | null;
+        stackTrace: string | null;
+        instruction: string;
+        model: string;
+      },
+    ) => {
       const controller = new AbortController();
-      abortControllerRef.current = controller;
+      abortControllersRef.current.set(chatId, controller);
 
       const promotePhase = (phase: number) => {
         const safePhase = Math.min(Math.max(phase, 0), config.statusSequence.length - 1);
-        setChat((prev) => {
-          if (!prev) return prev;
+        updateChat(chatId, (prev) => {
           if (prev.statusPhase === safePhase && prev.statusLabel) {
             return prev;
           }
@@ -1381,6 +1903,17 @@ export function FlowOverlayProvider(props: FlowOverlayProps = {}) {
         let hasPromotedUpdating = false;
 
         const processEvent = (event: StreamEvent) => {
+          // Handle session event to store sessionId for undo
+          if (event.event === "session") {
+            updateChat(chatId, (prev) => ({
+              ...prev,
+              sessionId: event.sessionId,
+              undoStatus: "idle",
+              undoMessage: undefined,
+            }));
+            return;
+          }
+
           if (event.event === "status") {
             const message = event.message?.trim();
             if (message) {
@@ -1392,15 +1925,11 @@ export function FlowOverlayProvider(props: FlowOverlayProps = {}) {
                 promotePhase(2);
                 hasPromotedUpdating = true;
               }
-              setChat((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      statusContext: message,
-                      useTypewriter: true,
-                    }
-                  : prev,
-              );
+              updateChat(chatId, (prev) => ({
+                ...prev,
+                statusContext: message,
+                useTypewriter: true,
+              }));
             }
             if (!hasPromotedPlanning) {
               promotePhase(0);
@@ -1416,15 +1945,11 @@ export function FlowOverlayProvider(props: FlowOverlayProps = {}) {
                 promotePhase(1);
                 hasPromotedPlanning = true;
               }
-              setChat((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      statusContext: chunk,
-                      useTypewriter: false,
-                    }
-                  : prev,
-              );
+              updateChat(chatId, (prev) => ({
+                ...prev,
+                statusContext: chunk,
+                useTypewriter: false,
+              }));
             }
             return;
           }
@@ -1435,37 +1960,29 @@ export function FlowOverlayProvider(props: FlowOverlayProps = {}) {
               hasPromotedUpdating = true;
               const summary =
                 event.summary?.trim() || assistantSummary.trim() || "Changes applied.";
-              setChat((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      status: "success",
-                      instruction: "",
-                      statusAddonMode: "summary",
-                      summary,
-                      statusLabel: null,
-                      statusContext: null,
-                      statusPhase: Math.max(config.statusSequence.length - 1, 0),
-                      serverMessage: event.stderr ? event.stderr.trim() : prev.serverMessage,
-                    }
-                  : prev,
-              );
+              updateChat(chatId, (prev) => ({
+                ...prev,
+                status: "success",
+                instruction: "",
+                statusAddonMode: "summary",
+                summary,
+                statusLabel: null,
+                statusContext: null,
+                statusPhase: Math.max(config.statusSequence.length - 1, 0),
+                serverMessage: event.stderr ? event.stderr.trim() : prev.serverMessage,
+              }));
             } else {
-              setChat((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      status: "error",
-                      error: event.error ?? "Cursor CLI reported an error.",
-                      statusAddonMode: "idle",
-                      statusLabel: null,
-                      statusContext: null,
-                      summary: undefined,
-                      statusPhase: 0,
-                      serverMessage: event.stderr ? event.stderr.trim() : prev.serverMessage,
-                    }
-                  : prev,
-              );
+              updateChat(chatId, (prev) => ({
+                ...prev,
+                status: "error",
+                error: event.error ?? "Cursor CLI reported an error.",
+                statusAddonMode: "idle",
+                statusLabel: null,
+                statusContext: null,
+                summary: undefined,
+                statusPhase: 0,
+                serverMessage: event.stderr ? event.stderr.trim() : prev.serverMessage,
+              }));
             }
           }
         };
@@ -1504,145 +2021,128 @@ export function FlowOverlayProvider(props: FlowOverlayProps = {}) {
         }
       } catch (error) {
         if (controller.signal.aborted) {
-          setChat((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  status: "idle",
-                  statusAddonMode: "idle",
-                  statusLabel: null,
-                  statusContext: null,
-                  summary: undefined,
-                  error: undefined,
-                  serverMessage: undefined,
-                  statusPhase: 0,
-                }
-              : prev,
-          );
+          updateChat(chatId, (prev) => ({
+            ...prev,
+            status: "idle",
+            statusAddonMode: "idle",
+            statusLabel: null,
+            statusContext: null,
+            summary: undefined,
+            error: undefined,
+            serverMessage: undefined,
+            statusPhase: 0,
+          }));
           return;
         }
 
         console.error("[shipflow-overlay] Failed to communicate with Cursor CLI backend", error);
-        setChat((prev) =>
-          prev
-            ? {
-                ...prev,
-                status: "error",
-                error: error instanceof Error ? error.message : "Unable to send request.",
-                statusAddonMode: "idle",
-                statusLabel: null,
-                statusContext: null,
-                summary: undefined,
-              }
-            : prev,
-        );
-      } finally {
-        if (abortControllerRef.current === controller) {
-          abortControllerRef.current = null;
-        }
-      }
-    },
-    [config.endpoint, config.models, config.statusSequence, fallbackStatusLabel],
-  );
-
-  const onInstructionChange = useCallback((value: string) => {
-    setChat((current) => {
-      if (!current) {
-        return current;
-      }
-
-      const next: ChatState = {
-        ...current,
-        instruction: value,
-      };
-
-      if (current.status !== "submitting") {
-        next.status = "idle";
-      }
-
-      if (value.length > 0 && current.statusAddonMode !== "idle") {
-        next.statusAddonMode = "idle";
-        next.statusLabel = null;
-        next.statusContext = null;
-        next.summary = undefined;
-        next.statusPhase = 0;
-      }
-
-      if (current.status === "error") {
-        next.error = undefined;
-      }
-
-      return next;
-    });
-  }, []);
-
-  const onSubmit = useCallback(() => {
-    let payload:
-      | {
-          filePath: string | null;
-          htmlFrame: string | null;
-          stackTrace: string | null;
-          instruction: string;
-          model: string;
-        }
-      | null = null;
-
-    setChat((current) => {
-      if (!current) return current;
-      if (current.status === "submitting") return current;
-
-      const trimmed = current.instruction.trim();
-      if (!trimmed) {
-        return {
-          ...current,
-          error: "Please describe the change.",
+        updateChat(chatId, (prev) => ({
+          ...prev,
           status: "error",
+          error: error instanceof Error ? error.message : "Unable to send request.",
           statusAddonMode: "idle",
           statusLabel: null,
           statusContext: null,
           summary: undefined,
-          statusPhase: 0,
-          serverMessage: undefined,
-        };
+        }));
+      } finally {
+        abortControllersRef.current.delete(chatId);
       }
+    },
+    [config.endpoint, config.statusSequence, fallbackStatusLabel, updateChat],
+  );
 
-      payload = {
-        filePath: current.filePath,
-        htmlFrame: current.htmlFrame,
-        stackTrace: current.codeLocation,
-        instruction: trimmed,
-        model: current.model || config.models[0]?.value || "",
-      };
+  const onInstructionChange = useCallback(
+    (value: string) => {
+      if (!activeId) return;
+      updateChat(activeId, (current) => {
+        const next: ChatState = {
+          ...current,
+          instruction: value,
+        };
 
-      return {
+        if (current.status !== "submitting") {
+          next.status = "idle";
+        }
+
+        if (value.length > 0 && current.statusAddonMode !== "idle") {
+          next.statusAddonMode = "idle";
+          next.statusLabel = null;
+          next.statusContext = null;
+          next.summary = undefined;
+          next.statusPhase = 0;
+        }
+
+        if (current.status === "error") {
+          next.error = undefined;
+        }
+
+        return next;
+      });
+    },
+    [activeId, updateChat],
+  );
+
+  const onSubmit = useCallback(() => {
+    if (!activeId) return;
+
+    const chat = chats.get(activeId);
+    if (!chat) return;
+    if (chat.status === "submitting") return;
+
+    const trimmed = chat.instruction.trim();
+    if (!trimmed) {
+      updateChat(activeId, (current) => ({
         ...current,
-        instruction: trimmed,
-        status: "submitting",
-        error: undefined,
-        serverMessage: undefined,
-        statusAddonMode: "progress",
-        statusLabel: config.statusSequence[0] ?? fallbackStatusLabel,
-        statusContext: "Preparing Cursor CLI request…",
+        error: "Please describe the change.",
+        status: "error",
+        statusAddonMode: "idle",
+        statusLabel: null,
+        statusContext: null,
         summary: undefined,
         statusPhase: 0,
-      };
-    });
-
-    if (payload) {
-      void sendToBackend(payload);
+        serverMessage: undefined,
+      }));
+      return;
     }
-  }, [config.models, config.statusSequence, fallbackStatusLabel, sendToBackend]);
 
-  const stop = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
+    const payload = {
+      filePath: chat.filePath,
+      htmlFrame: chat.htmlFrame,
+      stackTrace: chat.codeLocation,
+      instruction: trimmed,
+      model: chat.model || config.models[0]?.value || "",
+    };
+
+    updateChat(activeId, (current) => ({
+      ...current,
+      instruction: trimmed,
+      status: "submitting",
+      error: undefined,
+      serverMessage: undefined,
+      statusAddonMode: "progress",
+      statusLabel: config.statusSequence[0] ?? fallbackStatusLabel,
+      statusContext: "Preparing Cursor CLI request…",
+      summary: undefined,
+      statusPhase: 0,
+    }));
+
+    void sendToBackend(activeId, payload);
+  }, [activeId, chats, config.models, config.statusSequence, fallbackStatusLabel, sendToBackend, updateChat]);
+
+  const onStop = useCallback(() => {
+    if (!activeId) return;
+    const controller = abortControllersRef.current.get(activeId);
+    if (controller) {
+      controller.abort();
     }
-  }, []);
+  }, [activeId]);
 
   const onModelChange = useCallback(
     (value: string) => {
-      setChat((current) => {
-        if (!current || current.status === "submitting") {
+      if (!activeId) return;
+      updateChat(activeId, (current) => {
+        if (current.status === "submitting") {
           return current;
         }
         const nextValue = config.models.some((option) => option.value === value)
@@ -1651,24 +2151,132 @@ export function FlowOverlayProvider(props: FlowOverlayProps = {}) {
         return { ...current, model: nextValue };
       });
     },
-    [config.models],
+    [activeId, config.models, updateChat],
   );
 
-  if (!portalTarget || !chat) {
+  const onUndo = useCallback(async () => {
+    if (!activeId) return;
+    const chat = chats.get(activeId);
+    const sessionId = chat?.sessionId;
+    if (!sessionId) {
+      console.warn("[shipflow-overlay] No session ID available for undo");
+      return;
+    }
+
+    // Update state to show undo is in progress
+    updateChat(activeId, (current) => ({
+      ...current,
+      undoStatus: "pending",
+      undoMessage: "Reverting changes...",
+    }));
+
+    try {
+      // Derive undo endpoint from the main endpoint
+      const undoEndpoint = config.endpoint.replace(/\/overlay\/?$/, "/undo");
+
+      const response = await fetch(undoEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ sessionId }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        updateChat(activeId, (current) => ({
+          ...current,
+          undoStatus: "error",
+          undoMessage: data.error ?? "Failed to undo changes.",
+        }));
+        return;
+      }
+
+      // Success - update state and close or reset
+      updateChat(activeId, (current) => ({
+        ...current,
+        undoStatus: "success",
+        undoMessage: data.message ?? `Reverted ${data.restored?.length ?? 0} file(s).`,
+        status: "idle",
+        statusAddonMode: "idle",
+        summary: undefined,
+        sessionId: undefined,
+      }));
+    } catch (error) {
+      console.error("[shipflow-overlay] Undo failed:", error);
+      updateChat(activeId, (current) => ({
+        ...current,
+        undoStatus: "error",
+        undoMessage: error instanceof Error ? error.message : "Undo request failed.",
+      }));
+    }
+  }, [activeId, chats, config.endpoint, updateChat]);
+
+  // Handle closing/dismissing the active chat
+  const onClose = useCallback(() => {
+    if (!activeId) return;
+    const chat = chats.get(activeId);
+    
+    // If chat is not submitting, remove it entirely
+    if (chat && chat.status !== "submitting") {
+      removeChat(activeId);
+      return;
+    }
+    
+    // Otherwise just close the bubble (request continues in background)
+    setActiveId(null);
+  }, [activeId, chats, removeChat]);
+
+  if (!portalTarget) {
+    return null;
+  }
+
+  // Get all chats that should show MiniStatus (submitting and not active)
+  const miniStatusChats = Array.from(chats.values()).filter(
+    (chat) => chat.status === "submitting" && chat.id !== activeId,
+  );
+
+  // Show bubble for active chat
+  const showBubble = activeChat !== null;
+
+  // Always render the container if we have any chats, to ensure smooth transitions
+  if (!showBubble && miniStatusChats.length === 0 && chats.size === 0) {
     return null;
   }
 
   return createPortal(
-    <Bubble
-      chat={chat}
-      onInstructionChange={onInstructionChange}
-      onSubmit={onSubmit}
-      onStop={stop}
-      onModelChange={onModelChange}
-      onClose={close}
-      modelOptions={config.models}
-      statusSequence={config.statusSequence}
-    />,
+    <div 
+      data-sf-overlay-container="true" 
+      data-chat-count={chats.size} 
+      data-active-id={activeId ?? "none"}
+      data-mini-status-count={miniStatusChats.length}
+      style={{ display: "contents" }}
+    >
+      {showBubble && activeChat && (
+        <Bubble
+          chat={activeChat}
+          onInstructionChange={onInstructionChange}
+          onSubmit={onSubmit}
+          onStop={onStop}
+          onModelChange={onModelChange}
+          onClose={onClose}
+          onUndo={onUndo}
+          resolveElement={resolveChatElement}
+          modelOptions={config.models}
+          statusSequence={config.statusSequence}
+        />
+      )}
+      {miniStatusChats.map((chat) => (
+        <MiniStatus
+          key={chat.id}
+          chat={chat}
+          label={chat.statusLabel ?? "Working..."}
+          onClick={() => setActiveId(chat.id)}
+          resolveElement={resolveChatElement}
+        />
+      ))}
+    </div>,
     portalTarget,
   );
 }
