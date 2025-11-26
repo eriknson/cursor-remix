@@ -14,7 +14,7 @@
     "cursor",
     "react-grab"
   ],
-  "homepage": "https://github.com/eriknson/shipflow/tree/main/packages/overlay#readme",
+  "homepage": "https://github.com/eriknson/shipflow/tree/main/readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/eriknson/shipflow.git",
