@@ -660,6 +660,15 @@ function Bubble({
   const [bubbleSize, setBubbleSize] = useState(null);
   const [bubbleStyle, setBubbleStyle] = useState(DEFAULT_BUBBLE_STYLE);
   const textareaRef = useRef(null);
+  const selectedModelLabel = useMemo(() => {
+    var _a2;
+    const selected = modelOptions.find((opt) => opt.value === chat.model);
+    return (_a2 = selected == null ? void 0 : selected.label) != null ? _a2 : chat.model;
+  }, [modelOptions, chat.model]);
+  const selectWidth = useMemo(() => {
+    const charWidth = selectedModelLabel.length * 0.8;
+    return `calc(${charWidth}ch + 44px)`;
+  }, [selectedModelLabel]);
   useClickOutside(bubbleRef, true, onClose);
   useLayoutEffect(() => {
     const node = bubbleRef.current;
@@ -933,6 +942,7 @@ function Bubble({
                       onChange: (event) => onModelChange(event.target.value),
                       disabled: disableEditing,
                       "data-sf-select": "true",
+                      style: { width: selectWidth },
                       children: modelOptions.map((option) => /* @__PURE__ */ jsx("option", { value: option.value, children: option.label }, option.value))
                     }
                   ),

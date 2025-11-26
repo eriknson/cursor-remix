@@ -60,7 +60,7 @@ const ensureOverlayStyles = (root: Document | ShadowRoot) => {
   --sf-inline-hover-bg: rgba(212, 212, 212, 0.85);
   --sf-inline-text: #4b5563;
   --sf-inline-disabled-opacity: 0.5;
-  --sf-select-bg: transparent;
+  --sf-select-bg: rgba(0, 0, 0, 0.035);
   --sf-select-hover-bg: rgba(212, 212, 212, 0.25);
   --sf-select-text: #4b5563;
   --sf-focus-ring: rgba(212, 212, 212, 0.5);
@@ -86,7 +86,7 @@ const ensureOverlayStyles = (root: Document | ShadowRoot) => {
     --sf-inline-bg: rgba(64, 64, 64, 0.5);
     --sf-inline-hover-bg: rgba(64, 64, 64, 0.8);
     --sf-inline-text: #e5e5e5;
-    --sf-select-bg: transparent;
+    --sf-select-bg: rgba(255, 255, 255, 0.045);
     --sf-select-hover-bg: rgba(64, 64, 64, 0.3);
     --sf-select-text: #a3a3a3;
     --sf-focus-ring: rgba(64, 64, 64, 0.5);
@@ -763,6 +763,19 @@ function Bubble({
   const [bubbleStyle, setBubbleStyle] = useState<CSSProperties>(DEFAULT_BUBBLE_STYLE);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // Get the currently selected model's label
+  const selectedModelLabel = useMemo(() => {
+    const selected = modelOptions.find((opt) => opt.value === chat.model);
+    return selected?.label ?? chat.model;
+  }, [modelOptions, chat.model]);
+
+  // Calculate select width based on label length (using ch units + padding)
+  const selectWidth = useMemo(() => {
+    // Approximate width: character count * ch + padding (12px left + 26px right + buffer)
+    const charWidth = selectedModelLabel.length * 0.8;
+    return `calc(${charWidth}ch + 44px)`;
+  }, [selectedModelLabel]);
+
   useClickOutside(bubbleRef, true, onClose);
 
   useLayoutEffect(() => {
@@ -1089,6 +1102,7 @@ function Bubble({
                 onChange={(event) => onModelChange(event.target.value)}
                 disabled={disableEditing}
                 data-sf-select="true"
+                style={{ width: selectWidth }}
               >
                 {modelOptions.map((option) => (
                   <option key={option.value} value={option.value}>

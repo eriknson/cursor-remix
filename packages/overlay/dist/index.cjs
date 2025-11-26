@@ -988,6 +988,15 @@ function Bubble({
   const [bubbleSize, setBubbleSize] = (0, import_react.useState)(null);
   const [bubbleStyle, setBubbleStyle] = (0, import_react.useState)(DEFAULT_BUBBLE_STYLE);
   const textareaRef = (0, import_react.useRef)(null);
+  const selectedModelLabel = (0, import_react.useMemo)(() => {
+    var _a2;
+    const selected = modelOptions.find((opt) => opt.value === chat.model);
+    return (_a2 = selected == null ? void 0 : selected.label) != null ? _a2 : chat.model;
+  }, [modelOptions, chat.model]);
+  const selectWidth = (0, import_react.useMemo)(() => {
+    const charWidth = selectedModelLabel.length * 0.8;
+    return `calc(${charWidth}ch + 44px)`;
+  }, [selectedModelLabel]);
   useClickOutside(bubbleRef, true, onClose);
   (0, import_react.useLayoutEffect)(() => {
     const node = bubbleRef.current;
@@ -1261,6 +1270,7 @@ function Bubble({
                       onChange: (event) => onModelChange(event.target.value),
                       disabled: disableEditing,
                       "data-sf-select": "true",
+                      style: { width: selectWidth },
                       children: modelOptions.map((option) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: option.value, children: option.label }, option.value))
                     }
                   ),

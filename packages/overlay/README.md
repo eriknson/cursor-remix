@@ -70,17 +70,38 @@ npm install -D @shipflow/overlay
    export const POST = createNextHandler();
    ```
 
-5. **Install the Cursor CLI**: make sure `cursor-agent` is in your `PATH`, or set `CURSOR_AGENT_BIN` to the absolute path.
+5. **Cursor CLI**: The package automatically searches for `cursor-agent` in PATH and common installation directories. If not found, set `CURSOR_AGENT_BIN` to the absolute path.
 
 ## CLI helper
-
-The package ships with a scaffold command:
 
 ```bash
 npx shipflow-overlay init
 ```
 
-It checks for the Cursor CLI, creates the provider and API route stubs, and appends a `CURSOR_AGENT_BIN=` line to `.env.example`.
+Scaffolds the provider and API route, checks for `cursor-agent`, and adds `CURSOR_AGENT_BIN` to `.env.example`.
+
+## Configuration
+
+**Next.js config:**
+```ts
+withShipflowOverlay(config, {
+  enableInProduction?: boolean;  // Enable in production (default: false)
+});
+```
+
+**API handler:**
+```ts
+createNextHandler({
+  cursorAgentBinary?: string;     // Custom binary path
+  timeoutMs?: number;             // Timeout in ms (default: 240000)
+  allowInProduction?: boolean;    // Allow in production (default: false)
+});
+```
+
+**Environment variables:**
+- `CURSOR_AGENT_BIN`: Absolute path to `cursor-agent` (if not in PATH)
+- `SHIPFLOW_OVERLAY_ENABLED`: Set to `"true"` to enable overlay
+- `SHIPFLOW_OVERLAY_AGENT_TIMEOUT_MS`: Timeout in milliseconds
 
 ## License
 
