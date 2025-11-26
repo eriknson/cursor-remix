@@ -1,9 +1,9 @@
-import path from "path";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 import type { StreamEvent } from "../runtime/types";
-import { runCursorAgentStream, resolveCursorAgentBinary, STREAM_HEADERS } from "./cursorAgent";
+// Import constants, including STREAM_HEADERS
+import { STREAM_HEADERS } from "../runtime/constants";
 
 export type ShipflowOverlayRequestPayload = {
   filePath: string | null;
@@ -23,6 +23,41 @@ export type ShipflowOverlayServerOptions = {
 };
 
 const DEFAULT_MODEL = "composer-1";
+
+// Edge-runtime-compatible path utilities (no Node.js path module required)
+const isAbsolutePath = (p: string): boolean => {
+  // Unix absolute path
+  if (p.startsWith("/")) return true;
+  // Windows absolute path (e.g., C:\ or C:/)
+  if (/^[A-Za-z]:[\\/]/.test(p)) return true;
+  return false;
+};
+
+const normalizeSeparators = (p: string): string => p.replace(/\\/g, "/");
+
+const getRelativePath = (from: string, to: string): string => {
+  const fromParts = normalizeSeparators(from).split("/").filter(Boolean);
+  const toParts = normalizeSeparators(to).split("/").filter(Boolean);
+
+  // Find common prefix length
+  let commonLength = 0;
+  const minLength = Math.min(fromParts.length, toParts.length);
+  for (let i = 0; i < minLength; i++) {
+    if (fromParts[i] === toParts[i]) {
+      commonLength++;
+    } else {
+      break;
+    }
+  }
+
+  // Build relative path
+  const upCount = fromParts.length - commonLength;
+  const downParts = toParts.slice(commonLength);
+  const relativeParts = [...Array(upCount).fill(".."), ...downParts];
+
+  return relativeParts.join("/") || ".";
+};
+
 // Multiple patterns to extract file paths from various stack trace formats
 const STACK_TRACE_PATTERNS = [
   // Format: "in Component (path/to/file.tsx:10:5)" or "at Component (path/to/file.tsx:10:5)"
@@ -68,7 +103,7 @@ const normalizeFilePath = (filePath: string | null) => {
 
 const pathIsAbsoluteSafe = (target: string) => {
   try {
-    return path.isAbsolute(target);
+    return isAbsolutePath(target);
   } catch {
     return false;
   }
@@ -76,7 +111,7 @@ const pathIsAbsoluteSafe = (target: string) => {
 
 const relativeSafe = (from: string, to: string) => {
   try {
-    return path.relative(from, to);
+    return getRelativePath(from, to);
   } catch {
     return to;
   }
@@ -135,19 +170,43 @@ const extractFilePathFromStackTrace = (stackTrace: string | null) => {
   return null;
 };
 
+const extractComponentNames = (stackTrace: string | null): string[] => {
+  if (!stackTrace) return [];
+  // Match "at ComponentName (Server)" or "in ComponentName (Server)" - PascalCase components only
+  const matches = stackTrace.matchAll(/\b(?:at|in)\s+([A-Z][a-zA-Z0-9]*)\s*\(Server\)/g);
+  return [...matches].map((m) => m[1]).filter(Boolean);
+};
+
 const buildPrompt = (
-  filePath: string,
+  filePath: string | null,
   htmlFrame: string | null,
   stackTrace: string | null,
   instruction: string,
 ) => {
   const lines: string[] = [];
-  lines.push(`Open ${filePath}.`);
-  lines.push("Target the element matching this HTML:");
-  lines.push(htmlFrame ?? "(no HTML frame provided)");
-  lines.push("");
-  lines.push("and the component stack:");
-  lines.push(stackTrace ?? "(no component stack provided)");
+
+  if (filePath) {
+    lines.push(`Open ${filePath}.`);
+    lines.push("Target the element matching this HTML:");
+    lines.push(htmlFrame ?? "(no HTML frame provided)");
+    lines.push("");
+    lines.push("and the component stack:");
+    lines.push(stackTrace ?? "(no component stack provided)");
+  } else {
+    // Fallback for RSC or when file path cannot be determined
+    lines.push("Find the file containing the component that renders this HTML:");
+    lines.push(htmlFrame ?? "(no HTML frame provided)");
+    lines.push("");
+    lines.push("Component stack (use component names to locate the file):");
+    lines.push(stackTrace ?? "(no component stack provided)");
+
+    const componentNames = extractComponentNames(stackTrace);
+    if (componentNames.length > 0) {
+      lines.push("");
+      lines.push(`Look for files defining these components: ${componentNames.join(", ")}`);
+    }
+  }
+
   lines.push("");
   lines.push(`User request: ${instruction}`);
   return lines.join("\n");
@@ -203,21 +262,20 @@ export function createNextHandler(options: ShipflowOverlayServerOptions = {}) {
     if (!normalizedFilePath) {
       const truncatedStack = payload.stackTrace?.slice(0, 200) ?? "(none)";
       console.warn(
-        `${logPrefix} Could not extract file path. filePath: ${payload.filePath ?? "(null)"}, stackTrace snippet: ${truncatedStack}`,
-      );
-      return NextResponse.json(
-        {
-          error:
-            "Unable to determine target file path. Make sure you're selecting an element from your project (not from node_modules).",
-        },
-        { status: 400 },
+        `${logPrefix} No file path found, using fallback prompt. stackTrace snippet: ${truncatedStack}`,
       );
     }
 
+    // buildPrompt handles null filePath with a discovery-focused fallback prompt
     const prompt = buildPrompt(normalizedFilePath, payload.htmlFrame, payload.stackTrace, instruction);
     const model = payload.model?.trim() || options.defaultModel || DEFAULT_MODEL;
 
     try {
+      // Dynamically import the cursor agent implementation to avoid bundling Node.js dependencies
+      // (child_process, fs) in the initial bundle. This helps prevent errors in Edge environments
+      // where these modules are not available, even if this handler is only used in Node.js routes.
+      const { resolveCursorAgentBinary, runCursorAgentStream } = await import("./cursorAgent");
+
       const resolved = await resolveCursorAgentBinary(
         stripNullish({
           binaryPath: options.cursorAgentBinary,
@@ -315,6 +373,3 @@ export function createNextHandler(options: ShipflowOverlayServerOptions = {}) {
     }
   };
 }
-
-
-

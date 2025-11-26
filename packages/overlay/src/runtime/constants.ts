@@ -11,5 +11,7 @@ export const DEFAULT_MODEL_OPTIONS = [
   { value: "gemini-3", label: "Gemini 3" },
 ] as const;
 
-
-
+export const STREAM_HEADERS = {
+  "Content-Type": "application/x-ndjson; charset=utf-8",
+  "Cache-Control": "no-cache, no-transform",
+};
