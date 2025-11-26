@@ -1,34 +1,51 @@
-# Shipflow Overlay
+# Shipflow
 
-The repository combines React Grab and Cursor Agent as `@shipflow/overlay`.
+**Visual editing for React apps, powered by Cursor Agent.**
 
-1. Install the package: `npm install -D @shipflow/overlay`.
-2. Wrap your Next.js config with `withShipflowOverlay`:
-   ```ts
-   // next.config.ts
-   import { withShipflowOverlay } from "@shipflow/overlay/next";
-   export default withShipflowOverlay({
-     // existing config
-   }, {
-     logClipboardEndpoint: "/api/log-clipboard",
-   });
-   ```
-3. Create `app/shipflow-overlay-provider.tsx`:
-   ```tsx
-   'use client';
-   import { FlowOverlayProvider } from "@shipflow/overlay";
+Shipflow lets you select any component in your running app and edit it with AI — bridging the gap between design and code.
 
-   export function ShipflowOverlay() {
-     return <FlowOverlayProvider />;
-   }
-   ```
-4. Render the overlay in `app/layout.tsx` inside a dev-only guard.
-5. Add the Shipflow API handler at `app/api/shipflow/overlay/route.ts`:
-   ```ts
-   import { createNextHandler } from "@shipflow/overlay/next";
-   export const runtime = "nodejs";
-   export const dynamic = "force-dynamic";
-   export const POST = createNextHandler();
-   ```
-6. Make sure the `cursor-agent` CLI is installed and on your `PATH`, or set `CURSOR_AGENT_BIN`.
-7. Optionally run `npx shipflow-overlay init` to scaffold these files and add `.env` hints automatically.
+---
+
+## What is Shipflow?
+
+Shipflow combines [React Grab](https://github.com/nicholasgriffintn/react-grab) with [Cursor Agent](https://docs.cursor.com/agent) to create a seamless visual editing experience:
+
+1. **Select** — Click any element in your app to highlight it
+2. **Describe** — Type what you want to change
+3. **Apply** — Cursor Agent edits the source code directly
+
+No context switching. No copy-pasting file paths. Just point and describe.
+
+## Packages
+
+| Package | Description |
+|---------|-------------|
+| [`@shipflow/overlay`](./packages/overlay) | Drop-in React overlay for Next.js projects |
+
+## About This Repo
+
+This repository serves as an **R&D sandbox** for Shipflow development. It includes:
+
+- **`/packages/overlay`** — The core `@shipflow/overlay` npm package
+- **`/app`** — A [shadcn/ui dashboard](https://ui.shadcn.com/) for testing the overlay in a real-world context
+- **`/components`** — UI components used for integration testing
+
+The dashboard provides a rich, production-like environment to validate the editing experience across various component patterns.
+
+## Quick Start
+
+```bash
+npm install -D @shipflow/overlay
+```
+
+See the [@shipflow/overlay README](./packages/overlay/README.md) for full setup instructions.
+
+## Requirements
+
+- Next.js 14+ or 15+
+- React 18+ or 19
+- [Cursor Agent CLI](https://docs.cursor.com/agent) installed and available in PATH
+
+## License
+
+MIT © Shipflow
