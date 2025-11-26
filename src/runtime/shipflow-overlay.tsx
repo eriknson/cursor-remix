@@ -543,7 +543,7 @@ const createInitialState = (
   summary: undefined,
 });
 
-export type FlowOverlayProps = Partial<ShipflowOverlayConfig> & {
+export type ShipflowOverlayProps = Partial<ShipflowOverlayConfig> & {
   enableClipboardInterceptor?: boolean;
   clipboardOptions?: ClipboardInterceptorOptions;
 };
@@ -1213,7 +1213,7 @@ function Bubble({
   );
 }
 
-export function FlowOverlayProvider(props: FlowOverlayProps = {}) {
+export function ShipflowOverlay(props: ShipflowOverlayProps = {}) {
   const [portalTarget, setPortalTarget] = useState<
     ShadowRoot | HTMLElement | null
   >(null);

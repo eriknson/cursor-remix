@@ -1,8 +1,8 @@
 export {
-  FlowOverlayProvider,
+  ShipflowOverlay,
   Typewriter,
   type FlowOverlayProps,
-} from './runtime/flow-overlay';
+} from './runtime/shipflow-overlay';
 export {
   registerClipboardInterceptor,
   type ClipboardInterceptorOptions,
