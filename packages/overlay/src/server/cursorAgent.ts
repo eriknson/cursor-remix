@@ -411,6 +411,31 @@ export async function runCursorAgentStream(
 
         try {
           const parsed = JSON.parse(line) as Record<string, unknown>;
+          
+          // Check for error events and fail immediately
+          if (typeof parsed.type === "string" && parsed.type === "error") {
+            const errorMessage = 
+              typeof parsed.message === "string" 
+                ? parsed.message 
+                : typeof parsed.error === "string"
+                ? parsed.error
+                : "Cursor CLI reported an error.";
+            
+            // Check if it's a model validation error
+            if (errorMessage.toLowerCase().includes("cannot use this model") || 
+                errorMessage.toLowerCase().includes("available models")) {
+              if (!settled) {
+                settled = true;
+                clearTimeout(timeoutId);
+                flushDone(false, null, errorMessage);
+                resolve();
+                return;
+              }
+            }
+            
+            sendStatus(`Error: ${errorMessage}`);
+          }
+          
           const status = describeEvent(parsed);
           if (status) {
             const trimmed = status.trim();
@@ -477,6 +502,20 @@ export async function runCursorAgentStream(
       child.stderr.on("data", (chunk) => {
         const text = chunk.toString();
         stderrAggregate += text;
+        
+        // Check for model validation errors in stderr
+        const lowerText = text.toLowerCase();
+        if ((lowerText.includes("cannot use this model") || 
+             lowerText.includes("available models")) && 
+            !settled) {
+          settled = true;
+          clearTimeout(timeoutId);
+          const errorMessage = text.trim();
+          flushDone(false, null, errorMessage);
+          resolve();
+          return;
+        }
+        
         for (const line of text.split(/\r?\n/).map((entry: string) => entry.trim()).filter(Boolean)) {
           sendStatus(`[stderr] ${line}`);
         }

@@ -189,7 +189,7 @@ function createNextHandler(options = {}) {
     const prompt = buildPrompt(normalizedFilePath, payload.htmlFrame, payload.stackTrace, instruction);
     const model = ((_d = payload.model) == null ? void 0 : _d.trim()) || options.defaultModel || DEFAULT_MODEL;
     try {
-      const { resolveCursorAgentBinary, runCursorAgentStream } = await import("./cursorAgent-3DUS67C6.js");
+      const { resolveCursorAgentBinary, runCursorAgentStream } = await import("./cursorAgent-AWX72GPY.js");
       const resolved = await resolveCursorAgentBinary(
         stripNullish({
           binaryPath: options.cursorAgentBinary,

@@ -200,6 +200,19 @@ async function runCursorAgentStream(options, send) {
         }
         try {
           const parsed = JSON.parse(line);
+          if (typeof parsed.type === "string" && parsed.type === "error") {
+            const errorMessage = typeof parsed.message === "string" ? parsed.message : typeof parsed.error === "string" ? parsed.error : "Cursor CLI reported an error.";
+            if (errorMessage.toLowerCase().includes("cannot use this model") || errorMessage.toLowerCase().includes("available models")) {
+              if (!settled) {
+                settled = true;
+                clearTimeout(timeoutId);
+                flushDone(false, null, errorMessage);
+                resolve();
+                return;
+              }
+            }
+            sendStatus(`Error: ${errorMessage}`);
+          }
           const status = describeEvent(parsed);
           if (status) {
             const trimmed = status.trim();
@@ -255,6 +268,15 @@ async function runCursorAgentStream(options, send) {
       child.stderr.on("data", (chunk) => {
         const text = chunk.toString();
         stderrAggregate += text;
+        const lowerText = text.toLowerCase();
+        if ((lowerText.includes("cannot use this model") || lowerText.includes("available models")) && !settled) {
+          settled = true;
+          clearTimeout(timeoutId);
+          const errorMessage = text.trim();
+          flushDone(false, null, errorMessage);
+          resolve();
+          return;
+        }
         for (const line of text.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean)) {
           sendStatus(`[stderr] ${line}`);
         }
