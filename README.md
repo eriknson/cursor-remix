@@ -1,6 +1,6 @@
 # Shipflow
 
-**Point-and-click editing for Next.js, powered by Cursor Agent.**
+**Point-and-click editing for Next.js, powered by [Cursor Agent](https://cursor.com/blog/cli) and [React Grab](https://www.react-grab.com/).**
 
 Hold `⌘+C`, click any component, describe the change → Cursor edits the code.
 
