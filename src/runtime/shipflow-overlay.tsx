@@ -357,7 +357,7 @@ const ensureOverlayStyles = (root: Document | ShadowRoot) => {
   display: flex;
   flex-direction: row;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   width: 100%;
 }
 
@@ -1197,11 +1197,6 @@ function Bubble({
               <div data-sf-status-label="true">
                 <CursorIcon />
                 <span>Changes applied</span>
-              </div>
-              <div data-sf-undo-wrapper="true">
-                <button type="button" onClick={handleUndo} data-sf-undo="true">
-                  Undo <Command /> Z
-                </button>
               </div>
             </div>
           ) : null}
